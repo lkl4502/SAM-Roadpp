@@ -259,22 +259,18 @@ def graph_collate_fn(batch):
 class SatMapDataset(Dataset):
     def __init__(self, config, is_train, dev_run=False):
         self.config = config
-        
         assert self.config.DATASET in {'cityscale','globalscale', 'spacenet'}
         if self.config.DATASET == 'cityscale':
             self.IMAGE_SIZE = 2048
             # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
             self.SAMPLE_MARGIN = 64
-
             rgb_pattern = '../region_{}_sat.png'
             keypoint_mask_pattern = '../keypoint_mask_{}.png'
             road_mask_pattern = '../road_mask_{}.png'
-            
             gt_graph_pattern = '../region_{}_refine_gt_graph.p'
 
             train, val, test = cityscale_data_partition()
-            
-
+        
             # coord-transform = (r, c) -> (x, y)
             # takes [N, 2] points
             coord_transform = lambda v : v[:, ::-1]
@@ -283,16 +279,13 @@ class SatMapDataset(Dataset):
             self.IMAGE_SIZE = 2048
             # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
             self.SAMPLE_MARGIN = 64
-
             rgb_pattern = '../region_{}_sat.png'
             keypoint_mask_pattern = '../keypoint_mask_{}.png'
             road_mask_pattern = '../road_mask_{}.png'
-            
             gt_graph_pattern = '../region_{}_refine_gt_graph.p'
 
             train, val, test, test_out = globalscale_data_partition()
             
-
             # coord-transform = (r, c) -> (x, y)
             # takes [N, 2] points
             coord_transform = lambda v : v[:, ::-1]
@@ -300,7 +293,6 @@ class SatMapDataset(Dataset):
         elif self.config.DATASET == 'spacenet':
             self.IMAGE_SIZE = 400
             self.SAMPLE_MARGIN = 0
-
             rgb_pattern = '../{}__rgb.png'
             keypoint_mask_pattern = '../processed/keypoint_mask_{}.png'
             road_mask_pattern = '../processed/road_mask_{}.png'
@@ -321,7 +313,6 @@ class SatMapDataset(Dataset):
         self.tile_indices = tile_indices
 
         self.trainnum = train
-        
         # Stores all imgs in memory.
         self.rgbs, self.keypoint_masks, self.road_masks  = [], [], []
         # For graph label generation.
@@ -331,14 +322,11 @@ class SatMapDataset(Dataset):
         if dev_run:
             tile_indices = tile_indices[:4]
         ##### FAST DEBUG
-
         for tile_idx in tile_indices:
             print(f'loading tile {tile_idx}')
             rgb_path = rgb_pattern.format(tile_idx)
             road_mask_path = road_mask_pattern.format(tile_idx)
-           
             keypoint_mask_path = keypoint_mask_pattern.format(tile_idx)
-
             # graph label gen
             # gt graph: dict for adj list, for cityscale set keys are (r, c) nodes, values are list of (r, c) nodes
             # I don't know what coord system spacenet uses but we convert them all to (x, y)
@@ -346,14 +334,11 @@ class SatMapDataset(Dataset):
             if len(gt_graph_adj) == 0:
                 print(f'===== skipped empty tile {tile_idx} =====')
                 continue
-
             self.rgbs.append(read_rgb_img(rgb_path))
             self.road_masks.append(cv2.imread(road_mask_path, cv2.IMREAD_GRAYSCALE))
-           
             self.keypoint_masks.append(cv2.imread(keypoint_mask_path, cv2.IMREAD_GRAYSCALE))
             graph_label_generator = GraphLabelGenerator(config, gt_graph_adj, coord_transform)
             self.graph_label_generators.append(graph_label_generator)
-            
         
         self.sample_min = self.SAMPLE_MARGIN
         self.sample_max = self.IMAGE_SIZE - (self.config.PATCH_SIZE + self.SAMPLE_MARGIN)
@@ -370,10 +355,8 @@ class SatMapDataset(Dataset):
         if self.is_train:
             if self.config.DATASET == 'cityscale':
                 num_patches_per_image = max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2
-           
                 return len(self.trainnum) * num_patches_per_image             
-            elif self.config.DATASET == 'spacenet':
-                
+            elif self.config.DATASET == 'spacenet':               
                 num_patches_per_image = max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2
                 return len(self.trainnum) * num_patches_per_image
         else:
@@ -388,13 +371,11 @@ class SatMapDataset(Dataset):
             end_x, end_y = begin_x + self.config.PATCH_SIZE, begin_y + self.config.PATCH_SIZE
         else:
             # Returns eval patch
-            img_idx, (begin_x, begin_y), (end_x, end_y) = self.eval_patches[idx]
-        
+            img_idx, (begin_x, begin_y), (end_x, end_y) = self.eval_patches[idx]  
         # Crop patch imgs and masks
         rgb_patch = self.rgbs[img_idx][begin_y:end_y, begin_x:end_x, :]
         keypoint_mask_patch = self.keypoint_masks[img_idx][begin_y:end_y, begin_x:end_x]
-        road_mask_patch = self.road_masks[img_idx][begin_y:end_y, begin_x:end_x]
-       
+        road_mask_patch = self.road_masks[img_idx][begin_y:end_y, begin_x:end_x]    
         # Augmentation
         rot_index = 0
         if self.is_train:
@@ -402,15 +383,12 @@ class SatMapDataset(Dataset):
             # CCW
             rgb_patch = np.rot90(rgb_patch, rot_index, [0,1]).copy()
             keypoint_mask_patch = np.rot90(keypoint_mask_patch, rot_index, [0, 1]).copy()
-            road_mask_patch = np.rot90(road_mask_patch, rot_index, [0, 1]).copy()
-           
+            road_mask_patch = np.rot90(road_mask_patch, rot_index, [0, 1]).copy()       
         # Sample graph labels from patch
         patch = ((begin_x, begin_y), (end_x, end_y))
         # points are img (x, y) inside the patch.
-        graph_points, topo_samples = self.graph_label_generators[img_idx].sample_patch(patch, rot_index)
-        
-        pairs, connected, valid = zip(*topo_samples)
-        
+        graph_points, topo_samples = self.graph_label_generators[img_idx].sample_patch(patch, rot_index)       
+        pairs, connected, valid = zip(*topo_samples)  
         # rgb: [H, W, 3] 0-255
         # masks: [H, W] 0-1
         return {
