@@ -168,9 +168,7 @@ class TopoNet(nn.Module):
         self.hidden_dim = 128
         self.heads = 4
         self.num_attn_layers = 3
-        #self.hidden_dim2 = 256
         self.feature_proj = nn.Linear(feature_dim, self.hidden_dim)
-        #self.point_proj = nn.Linear(66,64)
         self.pair_proj = nn.Linear(2*self.hidden_dim+ 152 , self.hidden_dim)
         # Create Transformer Encoder Layer
         encoder_layer = nn.TransformerEncoderLayer(

@@ -1,15 +1,11 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-# from torchvision.ops import nms
 import matplotlib.pyplot as plt
 import math
 import copy
-
 from functools import partial
 from torchmetrics.classification import BinaryJaccardIndex, F1Score, BinaryPrecisionRecallCurve
-
 import lightning.pytorch as pl
 from sam.segment_anything.modeling.image_encoder import ImageEncoderViT
 from sam.segment_anything.modeling.mask_decoder import MaskDecoder
@@ -17,11 +13,9 @@ from sam.segment_anything.modeling.prompt_encoder import PromptEncoder
 from sam.segment_anything.modeling.transformer import TwoWayTransformer
 from sam.segment_anything.modeling.common import LayerNorm2d
 import numpy as np
-
 import wandb
 import pprint
 import torchvision
-
 import vitdet
 
 
@@ -129,7 +123,6 @@ class TopoNet(nn.Module):
         self.num_attn_layers = 3
         #self.hidden_dim2 = 256
         self.feature_proj = nn.Linear(feature_dim, self.hidden_dim)
-       # self.point_proj = nn.Linear(66,self.hidden_dim)
         self.pair_proj = nn.Linear(2 * self.hidden_dim + 152, self.hidden_dim)
 
         # Create Transformer Encoder Layer
