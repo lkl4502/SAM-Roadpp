@@ -22,13 +22,10 @@ import vitdet
 
 def find_highest_mask_point(x, y, mask, device='cuda'):
     H, W, D = mask.shape
-
     x = torch.clamp(x, 0, W)
     y = torch.clamp(y, 0, D)
-
     x = int(x)
     y = int(y)
-    
     radius = torch.tensor(2)
     # limit coordinate range
     x_min = max(0, x - radius)
@@ -54,44 +51,36 @@ def find_highest_mask_point(x, y, mask, device='cuda'):
             y_final = max_pos[0][1] + y_min
         else:
             x_final, y_final = x, y
-
     else:
         x_final, y_final = x, y
         
     return x_final, y_final
 
 def extract_point(x1,y1,x2,y2,image,num_points):
-
     H, W = image.shape[-2:] 
-
     x_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
     y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)#uniform sampling
-    
+
     x_interp = x1.unsqueeze(-1) + (x2 - x1).unsqueeze(-1) * x_values
     y_interp = y1.unsqueeze(-1) + (y2 - y1).unsqueeze(-1) * y_values
-    
     
     x_interp = torch.clamp(x_interp.long(), min=0, max=W-1)
     y_interp = torch.clamp(y_interp.long(), min=0, max=H-1)
     
-    
     x_plus_1 = torch.clamp(x_interp + 1, max=W-1)
     y_plus_1 = torch.clamp(y_interp + 1, max=H-1)
-   
+    
     x_final = torch.cat([x_interp,x_interp,x_plus_1], dim=-1)
     y_final = torch.cat([y_interp,y_plus_1,y_interp], dim=-1)
-
+    
     return(x_final,y_final)# sample points
 
-   
 def extendline(points1, points2, image):
     """Using linear interpolation to get pixels between two points in batch."""
     B, N, _ = points1.shape  # B: batch size, N: number of point pairs
     H, W = image.shape[-2:]  
     height, width = H,W
-    
     extend_length=8 #extend length
-
     batch_A = points1
     batch_B = points2
     # direction vector
@@ -258,8 +247,6 @@ class TopoNet(nn.Module):
         scores = torch.sigmoid(logits)
         return logits, scores
 
-
-
 class _LoRA_qkv(nn.Module):
     """In Sam it is implemented as
     self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
@@ -300,7 +287,6 @@ class SAMRoadplus(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
-
         assert config.SAM_VERSION in {'vit_b', 'vit_l', 'vit_h'}
         if config.SAM_VERSION == 'vit_b':
             ### SAM config (B)
@@ -388,7 +374,6 @@ class SAMRoadplus(pl.LightningModule):
                 activation(),
                 nn.ConvTranspose2d(32,  2, kernel_size=2, stride=2),
             )
-
         #### TOPONet
         self.bilinear_sampler = BilinearSampler(config)
         self.topo_net = TopoNet(config, 256)
@@ -442,18 +427,14 @@ class SAMRoadplus(pl.LightningModule):
         else:
             self.mask_criterion = torch.nn.BCEWithLogitsLoss()
         self.topo_criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
-
         #### Metrics
         self.keypoint_iou = BinaryJaccardIndex(threshold=0.5)
-        # num_classes 是你有多少个类别
-        #self.road_iou = MulticlassJaccardIndex(num_classes=4)  # 假设类别是 0, 0.2, 0.6, 1
         self.road_iou = BinaryJaccardIndex(threshold=0.5)
         self.topo_f1 = F1Score(task='binary', threshold=0.5, ignore_index=-1)
         # testing only, not used in training
         self.keypoint_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
         self.road_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
         self.topo_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
-
         if self.config.NO_SAM:
             return
         with open(config.SAM_CKPT_PATH, "rb") as f:
@@ -531,8 +512,6 @@ class SAMRoadplus(pl.LightningModule):
             )
             mask_scores = torch.sigmoid(mask_logits)
         else:
-           # print(image_embeddings.shape)
-            
             mask_logits = self.map_decoder(image_embeddings)
             mask_scores = torch.sigmoid(mask_logits)#torch.Size([16, 3, 512, 512])
         point_features,newpoint,point_features_o = self.bilinear_sampler(image_embeddings, graph_points,mask_scores)
@@ -549,38 +528,22 @@ class SAMRoadplus(pl.LightningModule):
         # masks: [B, H, W]
         rgb, keypoint_mask, road_mask  = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
         graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
         # [B, H, W, 3]
         mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
         mask_loss = self.mask_criterion(mask_logits, gt_masks)
-
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
         # [B, N_samples, N_pairs, 1]
         topo_loss = self.topo_criterion(topo_logits, topo_gt.unsqueeze(-1).to(torch.float32))
 
-        # ### DEBUG NAN
-        # for nan_index in torch.nonzero(torch.isnan(topo_loss[:, :, :, 0])):
-        
-            # print('nan index: B, Sample, Pair')
-            # print(nan_index)
-            # import pdb
-            # pdb.set_trace()
-
-        #### DEBUG NAN
-
-
         topo_loss *= topo_loss_mask.unsqueeze(-1)
         topo_loss = torch.nansum(torch.nansum(topo_loss) / topo_loss_mask.sum())
-        #topo_loss = topo_loss.sum() / topo_loss_mask.sum()
 
         loss = mask_loss + topo_loss
 
         if torch.any(torch.isnan(loss)):
             print("NaN detected in loss. Using default loss value.")
-            loss = torch.tensor(0.0, device=loss.device)  # 替代默认值
-
+            loss = torch.tensor(0.0, device=loss.device)
         self.log('train_mask_loss', mask_loss, on_step=True, on_epoch=False, prog_bar=True)
         self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=False, prog_bar=True)
         self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True)
@@ -617,11 +580,8 @@ class SAMRoadplus(pl.LightningModule):
             data = [[wandb.Image(x.cpu().numpy()) for x in row] for row in list(zip(viz_rgb, viz_gt_keypoint, viz_gt_road, viz_pred_road , viz_pred_keypoint))]
             self.logger.log_table(key='viz_table', columns=columns, data=data)
 
-        road_mask = (road_mask > 0.5).float()  # 将大于0.5的值变为1，其余为0
-
+        road_mask = (road_mask > 0.5).float()
         self.keypoint_iou.update(mask_scores[..., 0], keypoint_mask)
-
-
         self.road_iou.update(mask_scores[..., 1], road_mask)
         valid = valid.to(torch.int32)
         topo_gt = (1 - valid) * -1 + valid * topo_gt

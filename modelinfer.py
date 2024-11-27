@@ -54,12 +54,9 @@ class BilinearSampler(nn.Module):
         # sampled_features is [B, N_points, D]
         sampled_features = sampled_features.squeeze(dim=-1).permute(0, 2, 1)
         return sampled_features
-    
-    
+     
 def extract_point(x1,y1,x2,y2,image,num_points):
-
     H, W = image.shape[-2:] 
-
     x_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
     y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)#uniform sampling
     
@@ -69,7 +66,6 @@ def extract_point(x1,y1,x2,y2,image,num_points):
     x_interp = torch.clamp(x_interp.long(), min=0, max=W-1)
     y_interp = torch.clamp(y_interp.long(), min=0, max=H-1)
     
-    
     x_plus_1 = torch.clamp(x_interp + 1, max=W-1)
     y_plus_1 = torch.clamp(y_interp + 1, max=H-1)
    
@@ -78,7 +74,6 @@ def extract_point(x1,y1,x2,y2,image,num_points):
 
     return(x_final,y_final)# sample points
 
-   
 def extendline(points1, points2, image):
     """Using linear interpolation to get pixels between two points in batch."""
     B, N, _ = points1.shape  # B: batch size, N: number of point pairs
@@ -122,9 +117,7 @@ def extendline(points1, points2, image):
     features2 = image[np.arange(B)[:, None, None], x_final_2,  y_final_2]#extract mask feature
     features = torch.concat([features1,features,features2], dim=2)
 
-    
     return features
-
 
 class TopoNet(nn.Module):
     def __init__(self, config, feature_dim):
@@ -256,11 +249,9 @@ class _LoRA_qkv(nn.Module):
 
 class SAMRoadplus(pl.LightningModule):
     """This is the RelationFormer module that performs object detection"""
-
     def __init__(self, config):
         super().__init__()
         self.config = config
-
         assert config.SAM_VERSION in {'vit_b', 'vit_l', 'vit_h'}
         if config.SAM_VERSION == 'vit_b':
             ### SAM config (B)
@@ -316,7 +307,6 @@ class SAMRoadplus(pl.LightningModule):
                 window_size=14,
                 out_chans=prompt_embed_dim
             )
-
         if self.config.USE_SAM_DECODER:
             # SAM DECODER
             # Not used, just produce null embeddings
@@ -353,13 +343,9 @@ class SAMRoadplus(pl.LightningModule):
                 activation(),
                 nn.ConvTranspose2d(32, 2, kernel_size=2, stride=2),
             )
-
-        
         #### TOPONet
         self.bilinear_sampler = BilinearSampler(config)
         self.topo_net = TopoNet(config, 256)
-
-
         #### LORA
         if config.ENCODER_LORA:
             r = self.config.LORA_RANK
@@ -405,7 +391,6 @@ class SAMRoadplus(pl.LightningModule):
                 nn.init.kaiming_uniform_(w_A.weight, a=math.sqrt(5))
             for w_B in self.w_Bs:
                 nn.init.zeros_(w_B.weight)
-
         #### Losses
         if self.config.FOCAL_LOSS:
             self.mask_criterion = partial(torchvision.ops.sigmoid_focal_loss, reduction='mean')
@@ -475,7 +460,6 @@ class SAMRoadplus(pl.LightningModule):
         # graph_points: [B, N_points, 2]
         # pairs: [B, N_samples, N_pairs, 2]
         # valid: [B, N_samples, N_pairs]
-
         x = rgb.permute(0, 3, 1, 2)
         # [B, C, H, W]
         x = (x - self.pixel_mean) / self.pixel_std
@@ -508,8 +492,6 @@ class SAMRoadplus(pl.LightningModule):
         point_features = self.bilinear_sampler(image_embeddings, graph_points)
         # [B, N_sample, N_pair, 1]
         topo_logits, topo_scores = self.topo_net(graph_points, point_features, pairs, valid,mask_scores)
-        
-        
         # [B, H, W, 2]
         mask_logits = mask_logits.permute(0, 2, 3, 1)
         mask_scores = mask_scores.permute(0, 2, 3, 1)
@@ -520,7 +502,6 @@ class SAMRoadplus(pl.LightningModule):
         # graph_points: [B, N_points, 2]
         # pairs: [B, N_samples, N_pairs, 2]
         # valid: [B, N_samples, N_pairs]
-
         x = rgb.permute(0, 3, 1, 2)
         # [B, C, H, W]
         x = (x - self.pixel_mean) / self.pixel_std
@@ -558,7 +539,6 @@ class SAMRoadplus(pl.LightningModule):
         # graph_points: [B, N_points, 2]
         # pairs: [B, N_samples, N_pairs, 2]
         # valid: [B, N_samples, N_pairs]
-
         ## Predicts local topology
         point_features = self.bilinear_sampler(image_embeddings, graph_points)
         # [B, N_sample, N_pair, 1]
