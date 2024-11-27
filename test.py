@@ -3,35 +3,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
 from utils import load_config
-
-
 import wandb
-
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from lightning.pytorch.callbacks import LearningRateMonitor
-from argparse import ArgumentParser
-import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 
-from utils import load_config
 from dataset import SatMapDataset, graph_collate_fn
 from model import SAMRoadplus
-
-import wandb
-
-import lightning.pytorch as pl
-from lightning.pytorch.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
-from lightning.pytorch.callbacks import LearningRateMonitor
 import os
 import matplotlib.pyplot as plt
-
 import torch
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -83,5 +65,4 @@ if __name__ == "__main__":
         precision=args.precision,
         # profiler=profiler
         )
-
     trainer.test(net, dataloaders=val_loader, ckpt_path=args.checkpoint)

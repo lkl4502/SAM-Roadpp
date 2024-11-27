@@ -3,13 +3,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
 from utils import load_config
 from dataset import SatMapDataset, graph_collate_fn
 from model import SAMRoadplus
-
 import wandb
-
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -39,12 +36,9 @@ parser.add_argument(
 
 
 if __name__ == "__main__":
-
-
     args = parser.parse_args()
     config = load_config(args.config)
     dev_run = args.dev_run or args.fast_dev_run
-
     
     # start a new wandb run to track this script
     wandb.init(
@@ -71,7 +65,6 @@ if __name__ == "__main__":
         pin_memory=True,
         collate_fn=graph_collate_fn,
     )
-
     val_loader = DataLoader(
         val_ds,
         batch_size=config.BATCH_SIZE,
@@ -80,15 +73,9 @@ if __name__ == "__main__":
         pin_memory=True,
         collate_fn=graph_collate_fn,
     )
-
     checkpoint_callback = ModelCheckpoint(every_n_epochs=1, save_top_k=-1)
     lr_monitor = LearningRateMonitor(logging_interval='step')
-
     wandb_logger = WandbLogger()
-
-    # from lightning.pytorch.profilers import AdvancedProfiler
-    # profiler = AdvancedProfiler(dirpath='profile', filename='result_fast_matcher')
-
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,
         check_val_every_n_epoch=1,
@@ -101,6 +88,5 @@ if __name__ == "__main__":
       
         gradient_clip_val=1.0, 
         )
-
-    trainer.fit(net, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=args.resume)
-    #trainer.fit(net, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    # trainer.fit(net, train_dataloaders=train_loader, val_dataloaders=val_loader, ckpt_path=args.resume)
+    trainer.fit(net, train_dataloaders=train_loader, val_dataloaders=val_loader)
