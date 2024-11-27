@@ -4,10 +4,8 @@ from torch import nn
 import matplotlib.pyplot as plt
 import math
 import copy
-
 from functools import partial
 from torchmetrics.classification import BinaryJaccardIndex, F1Score, BinaryPrecisionRecallCurve
-
 import lightning.pytorch as pl
 from sam.segment_anything.modeling.image_encoder import ImageEncoderViT
 from sam.segment_anything.modeling.mask_decoder import MaskDecoder
@@ -15,11 +13,6 @@ from sam.segment_anything.modeling.prompt_encoder import PromptEncoder
 from sam.segment_anything.modeling.transformer import TwoWayTransformer
 from sam.segment_anything.modeling.common import LayerNorm2d
 from torchmetrics.classification import MulticlassJaccardIndex
-
-
-
-
-
 import wandb
 import pprint
 import torchvision
@@ -37,14 +30,12 @@ def find_highest_mask_point(x, y, mask, device='cuda'):
     y = int(y)
     
     radius = torch.tensor(2)
-    # 限制坐标范围
+    # limit coordinate range
     x_min = max(0, x - radius)
     x_max = min(W, x + radius)
     y_min = max(0, y - radius)
     y_max = min(D, y + radius)
 
-
-    
     mask_region = mask[:, x_min:x_max, y_min:y_max].to(device)
     
     x_coords = torch.arange(x_min, x_max, device=device).view(-1, 1).expand(x_max - x_min, y_max - y_min)
@@ -66,21 +57,15 @@ def find_highest_mask_point(x, y, mask, device='cuda'):
 
     else:
         x_final, y_final = x, y
-
-    
-    
- 
+        
     return x_final, y_final
-
-
 
 def extract_point(x1,y1,x2,y2,image,num_points):
 
-    
     H, W = image.shape[-2:] 
 
     x_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
-    y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
+    y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)#uniform sampling
     
     x_interp = x1.unsqueeze(-1) + (x2 - x1).unsqueeze(-1) * x_values
     y_interp = y1.unsqueeze(-1) + (y2 - y1).unsqueeze(-1) * y_values
@@ -96,39 +81,32 @@ def extract_point(x1,y1,x2,y2,image,num_points):
     x_final = torch.cat([x_interp,x_interp,x_plus_1], dim=-1)
     y_final = torch.cat([y_interp,y_plus_1,y_interp], dim=-1)
 
-    return(x_final,y_final)
+    return(x_final,y_final)# sample points
 
    
 def extendline(points1, points2, image):
     """Using linear interpolation to get pixels between two points in batch."""
     B, N, _ = points1.shape  # B: batch size, N: number of point pairs
     H, W = image.shape[-2:]  
-
-    
     height, width = H,W
-
-    extend_length=8
+    
+    extend_length=8 #extend length
 
     batch_A = points1
-
     batch_B = points2
-    
-    directions = batch_B - batch_A  
-    
+    # direction vector
+    directions = batch_B - batch_A  # (N, 2)
     
     lengths = torch.norm(directions, dim=2, keepdim=True)  # (N, 1)
-    
     lengths = lengths.masked_fill(lengths == 0, 1e-8)
-    
     directions_norm = directions / lengths  # (N, 2)
     
     extended_A = batch_A - directions_norm * extend_length  # (N, 2)
     extended_B = batch_B + directions_norm * extend_length  # (N, 2)
-    
+      # Round the coordinates to integers
     extended_A = torch.round(extended_A).long()
     extended_B = torch.round(extended_B).long()
     
-   
     extended_A[:, 0] = extended_A[:, 0].clamp(0, width - 1)
     extended_A[:, 1] = extended_A[:, 1].clamp(0, height - 1)
     extended_B[:, 0] = extended_B[:, 0].clamp(0, width - 1)
@@ -141,25 +119,14 @@ def extendline(points1, points2, image):
     x2, y2 = points2[..., 0], points2[..., 1]
     
     x_final_1,y_final_1  = extract_point(extend_x1,extend_y1,x1,y1,image,num_points =15 )#sample extend point one side
-
     x_final,y_final  = extract_point(x1,y1,x2,y2,image,num_points =20 ) #sample between point
-   
     x_final_2,y_final_2  = extract_point(extend_x2,extend_y2,x2,y2,image,num_points=15 )#sample extend point other side
 
-
-
     features1 = image[np.arange(B)[:, None, None], x_final_1,  y_final_1]
-
     features = image[np.arange(B)[:, None, None], x_final,  y_final]
-
     features2 = image[np.arange(B)[:, None, None], x_final_2,  y_final_2]#extract mask feature
-
-
-
-
     features = torch.concat([features1,features,features2], dim=2)
 
-    
     return features
 
 
@@ -188,50 +155,27 @@ class BilinearSampler(nn.Module):
                 if (x.item(), y.item()) == (0, 0):
                     target_new_points[batch_index, point_index] = torch.tensor([x, y])
                 else:
-                    current_mask = mask_scores[batch_index]#torch.Size([16, 3, 512, 512])
-
-                    # print(current_mask.shape)
-
-        
+                    current_mask = mask_scores[batch_index]#torch.Size([16, 3, 512, 512]
                     x_new,y_new = find_highest_mask_point(x, y, current_mask)
-
                     target_new_points[batch_index, point_index] = torch.tensor([x_new, y_new], dtype=torch.float32)
-
-        point = target_new_points
+        point = target_new_points 
         
-        target_new_points = (target_new_points / self.config.PATCH_SIZE) * 2.0 - 1.0
-        
-       
-        target_new_points = target_new_points.unsqueeze(2)
-        
-
+        target_new_points = (target_new_points / self.config.PATCH_SIZE) * 2.0 - 1.0    
+        target_new_points = target_new_points.unsqueeze(2)  
         sampled_features = F.grid_sample(feature_maps, target_new_points, mode='bilinear', align_corners=False)
+        sampled_features_target = sampled_features.squeeze(dim=-1).permute(0, 2, 1)#get target_features   
         
-    
-        sampled_features_target = sampled_features.squeeze(dim=-1).permute(0, 2, 1)#get target_features
-
-        
-        sample_points = (sample_points / self.config.PATCH_SIZE) * 2.0 - 1.0
-        
+        sample_points = (sample_points / self.config.PATCH_SIZE) * 2.0 - 1.0   
         sample_points = sample_points.unsqueeze(2)
-       
-        sampled_features_o = F.grid_sample(feature_maps, sample_points, mode='bilinear', align_corners=False)
-        
+        sampled_features_o = F.grid_sample(feature_maps, sample_points, mode='bilinear', align_corners=False)       
         sampled_features_source = sampled_features_o.squeeze(dim=-1).permute(0, 2, 1)#get source_features
 
         return sampled_features_target,point,sampled_features_source
-
-
-
-
-
-
 
 class TopoNet(nn.Module):
     def __init__(self, config, feature_dim):
         super(TopoNet, self).__init__()
         self.config = config
-
         self.hidden_dim = 128
         self.heads = 4
         self.num_attn_layers = 3
@@ -239,7 +183,6 @@ class TopoNet(nn.Module):
         self.feature_proj = nn.Linear(feature_dim, self.hidden_dim)
         #self.point_proj = nn.Linear(66,64)
         self.pair_proj = nn.Linear(2*self.hidden_dim+ 152 , self.hidden_dim)
-
         # Create Transformer Encoder Layer
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.hidden_dim ,
@@ -262,15 +205,11 @@ class TopoNet(nn.Module):
         # pairs_valid: [B, N_samples, N_pairs]
         # mask scores:[B,3,512,512]
         B,_,H,W = mask_scores.shape
-        
         point_features = F.relu(self.feature_proj(point_features))
         point_features_o = F.relu(self.feature_proj(point_features_o))
-
-        
         # gathers pairs
         batch_size, n_samples, n_pairs, _ = pairs.shape
         pairs = pairs.view(batch_size, -1, 2)
-        
         batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, n_samples * n_pairs)
         # Use advanced indexing to fetch the corresponding feature vectors
         # [B, N_samples * N_pairs, D]
@@ -281,23 +220,12 @@ class TopoNet(nn.Module):
         src_points = graph_points[batch_indices, pairs[:, :, 0]]
         #src_points = points[batch_indices, pairs[:, :, 0]]
         tgt_points = points[batch_indices, pairs[:, :, 1]]
-
         _,N,_ = tgt_points.shape
-
-        
-        
         mask_road_dim = mask_scores[:, 1, :, :] 
-
         line_features = extendline(src_points, tgt_points, mask_road_dim)#][B,N,64]
-
         #line_features = F.relu(self.point_proj(line_features))
-
-
-
         offset_x = tgt_points - src_points
-        #offset_y = src_points - tgt_points
-
-        ## ablation study
+        ##ablation study
         # [B, N_samples * N_pairs, 2D + 2]
         if self.config.TOPONET_VERSION == 'no_tgt_features':
             pair_features = torch.concat([src_features, torch.zeros_like(tgt_features), offset_x], dim=2)
@@ -306,39 +234,28 @@ class TopoNet(nn.Module):
         else:
             #pair_features = torch.concat([line_features,offset_x], dim=2)
             pair_features=torch.concat([src_features, tgt_features,line_features,offset_x], dim=2)
-            # 
-        
         # [B, N_samples * N_pairs, D]256+122
         pair_features = F.relu(self.pair_proj(pair_features))
-
-        #pair_features = torch.concat([pair_features,line_features,offset_x], dim=2)
-        
+        #pair_features = torch.concat([pair_features,line_features,offset_x], dim=2)     
         # attn applies within each local graph sample
         pair_features = pair_features.view(batch_size * n_samples, n_pairs, -1)
         # valid->not a padding
         pairs_valid = pairs_valid.view(batch_size * n_samples, n_pairs)
-
         # [B * N_samples, 1]
         #### flips mask for all-invalid pairs to prevent NaN
         all_invalid_pair_mask = torch.eq(torch.sum(pairs_valid, dim=-1), 0).unsqueeze(-1)
         pairs_valid = torch.logical_or(pairs_valid, all_invalid_pair_mask)
-
-        padding_mask = ~pairs_valid
-        
+        padding_mask = ~pairs_valid  
         ## ablation study
         if self.config.TOPONET_VERSION != 'no_transformer':
             pair_features = self.transformer_encoder(pair_features, src_key_padding_mask=padding_mask)
-        
         ## Seems like at inference time, the returned n_pairs heres might be less - it's the
         # max num of valid pairs across all samples in the batch
         _, n_pairs, _ = pair_features.shape
         pair_features = pair_features.view(batch_size, n_samples, n_pairs, -1)
-
         # [B, N_samples, N_pairs, 1]
         logits = self.output_proj(pair_features)
-
         scores = torch.sigmoid(logits)
-
         return logits, scores
 
 
@@ -350,7 +267,6 @@ class _LoRA_qkv(nn.Module):
     qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
     q, k, v = qkv.unbind(0)
     """
-
     def __init__(
             self,
             qkv: nn.Module,
@@ -379,11 +295,8 @@ class _LoRA_qkv(nn.Module):
         qkv[:, :, :, -self.dim:] += new_v
         return qkv
 
-
-
 class SAMRoadplus(pl.LightningModule):
     """This is the RelationFormer module that performs object detection"""
-
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -410,19 +323,15 @@ class SAMRoadplus(pl.LightningModule):
             encoder_num_heads=16
             encoder_global_attn_indexes=[7, 15, 23, 31]
             ###
-            
         prompt_embed_dim = 256
         # SAM default is 1024
         image_size = config.PATCH_SIZE
         self.image_size = image_size
         vit_patch_size = 16
         image_embedding_size = image_size // vit_patch_size
-
         encoder_output_dim = prompt_embed_dim
-
         self.register_buffer("pixel_mean", torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor([58.395, 57.12, 57.375]).view(-1, 1, 1), False)
-
         if self.config.NO_SAM:
             ### im1k + mae pre-trained vitb
             self.image_encoder = vitdet.VITBEncoder(image_size=image_size, output_feature_dim=prompt_embed_dim)
@@ -443,7 +352,6 @@ class SAMRoadplus(pl.LightningModule):
                 window_size=14,
                 out_chans=prompt_embed_dim
             )
-
         if self.config.USE_SAM_DECODER:
             # SAM DECODER
             # Not used, just produce null embeddings
@@ -478,15 +386,12 @@ class SAMRoadplus(pl.LightningModule):
                 activation(),
                 nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
                 activation(),
-                nn.ConvTranspose2d(32,  2, kernel_size=2, stride=2),#加入degree维度
+                nn.ConvTranspose2d(32,  2, kernel_size=2, stride=2),
             )
 
-        
         #### TOPONet
         self.bilinear_sampler = BilinearSampler(config)
         self.topo_net = TopoNet(config, 256)
-
-
         #### LORA
         if config.ENCODER_LORA:
             r = self.config.LORA_RANK
@@ -500,11 +405,9 @@ class SAMRoadplus(pl.LightningModule):
             # create for storage, then we can init them or load weights
             self.w_As = []  # These are linear layers
             self.w_Bs = []
-
             # lets freeze first
             for param in self.image_encoder.parameters():
                 param.requires_grad = False
-
             # Here, we do the surgery
             for t_layer_i, blk in enumerate(self.image_encoder.blocks):
                 # If we only want few lora layer instead of all
@@ -545,12 +448,10 @@ class SAMRoadplus(pl.LightningModule):
         # num_classes 是你有多少个类别
         #self.road_iou = MulticlassJaccardIndex(num_classes=4)  # 假设类别是 0, 0.2, 0.6, 1
         self.road_iou = BinaryJaccardIndex(threshold=0.5)
-        self.degree_iou = BinaryJaccardIndex(threshold=0.5)
         self.topo_f1 = F1Score(task='binary', threshold=0.5, ignore_index=-1)
         # testing only, not used in training
         self.keypoint_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
         self.road_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
-        self.degree_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
         self.topo_pr_curve = BinaryPrecisionRecallCurve(ignore_index=-1)
 
         if self.config.NO_SAM:
@@ -579,7 +480,6 @@ class SAMRoadplus(pl.LightningModule):
 
             self.matched_param_names = set(matched_names)
             self.load_state_dict(state_dict_to_load, strict=False)
-
     def resize_sam_pos_embed(self, state_dict, image_size, vit_patch_size, encoder_global_attn_indexes):
         new_state_dict = {k : v for k, v in state_dict.items()}
         pos_embed = new_state_dict['image_encoder.pos_embed']
@@ -600,14 +500,11 @@ class SAMRoadplus(pl.LightningModule):
                 rel_pos_params = F.interpolate(rel_pos_params, (token_size * 2 - 1, w), mode='bilinear', align_corners=False)
                 new_state_dict[k] = rel_pos_params[0, 0, ...]
         return new_state_dict
-
-    
     def forward(self, rgb, graph_points, pairs, valid):
         # rgb: [B, H, W, C]
         # graph_points: [B, N_points, 2]
         # pairs: [B, N_samples, N_pairs, 2]
         # valid: [B, N_samples, N_pairs]
-
         x = rgb.permute(0, 3, 1, 2)
         # [B, C, H, W]
         x = (x - self.pixel_mean) / self.pixel_std
@@ -638,79 +535,15 @@ class SAMRoadplus(pl.LightningModule):
             
             mask_logits = self.map_decoder(image_embeddings)
             mask_scores = torch.sigmoid(mask_logits)#torch.Size([16, 3, 512, 512])
-        
-
-      
-        ## Predicts local topology
- 
-
         point_features,newpoint,point_features_o = self.bilinear_sampler(image_embeddings, graph_points,mask_scores)
        # point_features = self.bilinear_sampler(image_embeddings, graph_points,mask_logits)
         # [B, N_sample, N_pair, 1]
-       # topo_logits, topo_scores = self.topo_net(graph_points, point_features, pairs, valid)
-
-        
+       # topo_logits, topo_scores = self.topo_net(graph_points, point_features, pairs, valid) 
         topo_logits, topo_scores = self.topo_net(newpoint, point_features,graph_points,point_features_o, pairs, valid,mask_scores)
-
-
-        
-        
         # [B, H, W, 3]
         mask_logits = mask_logits.permute(0, 2, 3, 1)
         mask_scores = mask_scores.permute(0, 2, 3, 1)
         return mask_logits, mask_scores, topo_logits, topo_scores
-    
-    def infer_masks_and_img_features(self, rgb):
-        # rgb: [B, H, W, C]
-        # graph_points: [B, N_points, 2]
-        # pairs: [B, N_samples, N_pairs, 2]
-        # valid: [B, N_samples, N_pairs]
-
-        x = rgb.permute(0, 3, 1, 2)
-        # [B, C, H, W]
-        x = (x - self.pixel_mean) / self.pixel_std
-        # [B, D, h, w]
-        image_embeddings = self.image_encoder(x)
-        # mask_logits, mask_scores: [B, 2, H, W]
-        if self.config.USE_SAM_DECODER:
-            sparse_embeddings, dense_embeddings = self.prompt_encoder(
-                points=None, boxes=None, masks=None
-            )
-            low_res_logits, iou_predictions = self.mask_decoder(
-                image_embeddings=image_embeddings,
-                image_pe=self.prompt_encoder.get_dense_pe(),
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=True
-            )
-            mask_logits = F.interpolate(
-                low_res_logits,
-                (self.image_encoder.img_size, self.image_encoder.img_size),
-                mode="bilinear",
-                align_corners=False,
-            )
-            mask_scores = torch.sigmoid(mask_logits)
-        else:
-            mask_logits = self.map_decoder(image_embeddings)
-            mask_scores = torch.sigmoid(mask_logits)
-        
-        # [B, H, W, 2]
-        mask_scores = mask_scores.permute(0, 2, 3, 1)
-        return mask_scores, image_embeddings,mask_logits
-    
-
-    def infer_toponet(self, image_embeddings, graph_points, pairs, valid, mask_logits):
-        # image_embeddings: [B, D, h, w]
-        # graph_points: [B, N_points, 2]
-        # pairs: [B, N_samples, N_pairs, 2]
-        # valid: [B, N_samples, N_pairs]
-
-        ## Predicts local topology
-        point_features = self.bilinear_sampler(image_embeddings, graph_points,mask_logits)
-        # [B, N_sample, N_pair, 1]
-        topo_logits, topo_scores = self.topo_net(graph_points, point_features, pairs, valid)
-        return topo_scores
-
 
     def training_step(self, batch, batch_idx):
         # masks: [B, H, W]
@@ -753,20 +586,14 @@ class SAMRoadplus(pl.LightningModule):
         self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True)
         return loss
 
-
     def validation_step(self, batch, batch_idx):
         # masks: [B, H, W]
         rgb, keypoint_mask, road_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
         graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
-        # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
+       # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
         mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
-
-
         mask_loss = self.mask_criterion(mask_logits, gt_masks)
-
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
         # [B, N_samples, N_pairs, 1]
         topo_loss = self.topo_criterion(topo_logits, topo_gt.unsqueeze(-1).to(torch.float32))
@@ -776,17 +603,15 @@ class SAMRoadplus(pl.LightningModule):
         self.log('val_mask_loss', mask_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-
         # Log images
         if batch_idx == 0:
             max_viz_num = 4
             viz_rgb = rgb[:max_viz_num, :, :]
             viz_pred_keypoint = mask_scores[:max_viz_num, :, :, 0]
             viz_pred_road = mask_scores[:max_viz_num, :, :, 1]
-            #viz_pred_degree = mask_scores[:max_viz_num, :, :, 2]
             viz_gt_keypoint = keypoint_mask[:max_viz_num, ...]
             viz_gt_road = road_mask[:max_viz_num, ...]
-            #viz_gt_degree = degree_mask[:max_viz_num, ...]
+
             
             columns = ['rgb', 'gt_keypoint', 'gt_road', 'pred_keypoint', 'pred_road']
             data = [[wandb.Image(x.cpu().numpy()) for x in row] for row in list(zip(viz_rgb, viz_gt_keypoint, viz_gt_road, viz_pred_road , viz_pred_keypoint))]
@@ -798,45 +623,30 @@ class SAMRoadplus(pl.LightningModule):
 
 
         self.road_iou.update(mask_scores[..., 1], road_mask)
-       # self.degree_iou.update(mask_scores[..., 2], degree_mask)
-        
         valid = valid.to(torch.int32)
         topo_gt = (1 - valid) * -1 + valid * topo_gt
         self.topo_f1.update(topo_scores, topo_gt.unsqueeze(-1))
         
-
     def on_validation_epoch_end(self):
         keypoint_iou = self.keypoint_iou.compute()
         road_iou = self.road_iou.compute()
-        #degree_iou = self.degree_iou.compute()
         topo_f1 = self.topo_f1.compute()
         self.log("keypoint_iou", keypoint_iou)
         self.log("road_iou", road_iou)
-        #self.log("degree_iou", degree_iou)
-        self.log("topo_f1", topo_f1)
-        print(keypoint_iou)
-        print(road_iou)
-        #print(degree_iou)
-        print(topo_f1)
+        self.log("topo_f1", topo_f1)  
         self.keypoint_iou.reset()
         self.road_iou.reset()
-        #self.degree_iou.reset()
         self.topo_f1.reset()
 
     def test_step(self, batch, batch_idx):
         # masks: [B, H, W]
-        rgb, keypoint_mask, road_mask ,degree_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask'],batch['degree_mask']
+        rgb, keypoint_mask, road_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
         graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
         # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
         mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
-
         self.keypoint_pr_curve.update(mask_scores[..., 0], keypoint_mask.to(torch.int32))
         self.road_pr_curve.update(mask_scores[..., 1], road_mask.to(torch.int32))
-
-        
         valid = valid.to(torch.int32)
         topo_gt = (1 - valid) * -1 + valid * topo_gt
         self.topo_pr_curve.update(topo_scores, topo_gt.unsqueeze(-1).to(torch.int32))
@@ -852,18 +662,13 @@ class SAMRoadplus(pl.LightningModule):
             best_recall = recall[best_threshold_index]
             best_f1 = f1_scores[best_threshold_index]
             print(f'Best threshold {best_threshold}, P={best_precision} R={best_recall} F1={best_f1}')
-        
         print('======= Finding best thresholds ======')
         find_best_threshold(self.keypoint_pr_curve, 'keypoint')
         find_best_threshold(self.road_pr_curve, 'road')
-        
-
         find_best_threshold(self.topo_pr_curve, 'topo')
-
 
     def configure_optimizers(self):
         param_dicts = []
-
         if not self.config.FREEZE_ENCODER and not self.config.ENCODER_LORA:
             encoder_params = {
                 'params': [p for k, p in self.image_encoder.named_parameters() if 'image_encoder.'+k in self.matched_param_names],
@@ -906,8 +711,6 @@ class SAMRoadplus(pl.LightningModule):
             print(f'optim param dict {i} params num: {param_num}')
 
         optimizer = torch.optim.AdamW(param_dicts, lr=self.config.BASE_LR, betas=(0.9, 0.999), weight_decay=0.1)
-        #optimizer = torch.optim.Adam(param_dicts, lr=self.config.BASE_LR)
-        # warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=10)
         step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[9,], gamma=0.1)
         return {'optimizer': optimizer, 'lr_scheduler': step_lr}
 

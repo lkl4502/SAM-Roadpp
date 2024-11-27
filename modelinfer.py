@@ -47,7 +47,6 @@ class BilinearSampler(nn.Module):
         
         # sample_points from [B, N_points, 2] to [B, N_points, 1, 2] for grid_sample
         sample_points = sample_points.unsqueeze(2)
-        
         # Use grid_sample for bilinear sampling. Align_corners set to False to use -1 to 1 grid space.
         # [B, D, N_points, 1]
         sampled_features = F.grid_sample(feature_maps, sample_points, mode='bilinear', align_corners=False)
@@ -59,147 +58,78 @@ class BilinearSampler(nn.Module):
     
 def extract_point(x1,y1,x2,y2,image,num_points):
 
-    #num_points = 50 # 固定插值的点数为 21
+    H, W = image.shape[-2:] 
 
-    H, W = image.shape[-2:]  # 图像的高度和宽度
-
-    
-    # 生成插值的 x 和 y 坐标，使用 linspace 来进行插值
     x_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
-    y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
+    y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)#uniform sampling
     
     x_interp = x1.unsqueeze(-1) + (x2 - x1).unsqueeze(-1) * x_values
     y_interp = y1.unsqueeze(-1) + (y2 - y1).unsqueeze(-1) * y_values
     
-    # 变为整数并确保不越界
     x_interp = torch.clamp(x_interp.long(), min=0, max=W-1)
     y_interp = torch.clamp(y_interp.long(), min=0, max=H-1)
     
-    # 1. 计算 x+1 和 y+1 序列，确保不会越界
+    
     x_plus_1 = torch.clamp(x_interp + 1, max=W-1)
     y_plus_1 = torch.clamp(y_interp + 1, max=H-1)
-
-   # print(y_plus_1.shape)
-
    
     x_final = torch.cat([x_interp,x_interp,x_plus_1], dim=-1)
     y_final = torch.cat([y_interp,y_plus_1,y_interp], dim=-1)
 
-    return(x_final,y_final)
+    return(x_final,y_final)# sample points
 
    
-def Top100(points1, points2, image):
+def extendline(points1, points2, image):
     """Using linear interpolation to get pixels between two points in batch."""
     B, N, _ = points1.shape  # B: batch size, N: number of point pairs
-    H, W = image.shape[-2:]  # 图像的高度和宽度
-
-     # 确保延长点在图像边界内
+    H, W = image.shape[-2:]
     height, width = H,W
-
-    extend_length=8
+    extend_length=8 #extend length
 
     batch_A = points1
-
     batch_B = points2
-    # 计算方向向量
+    # direction vector
     directions = batch_B - batch_A  # (N, 2)
 
     directions = directions.float() 
-    
-    # 计算向量的长度
     lengths = torch.norm(directions, dim=2, keepdim=True)  # (N, 1)
-    
-    # 处理长度为零的情况，避免除以零
     lengths = lengths.masked_fill(lengths == 0, 1e-8)
-    
-    # 归一化方向向量
     directions_norm = directions / lengths  # (N, 2)
-    
-    # 计算延长点 A' 和 B'
+
     extended_A = batch_A - directions_norm * extend_length  # (N, 2)
     extended_B = batch_B + directions_norm * extend_length  # (N, 2)
-    
-    # 将坐标四舍五入为整数
+    # Round the coordinates to integers
     extended_A = torch.round(extended_A).long()
     extended_B = torch.round(extended_B).long()
     
-   
     extended_A[:, 0] = extended_A[:, 0].clamp(0, width - 1)
     extended_A[:, 1] = extended_A[:, 1].clamp(0, height - 1)
     extended_B[:, 0] = extended_B[:, 0].clamp(0, width - 1)
     extended_B[:, 1] = extended_B[:, 1].clamp(0, height - 1)
 
-    # 分离出 x 和 y 坐标
     extend_x1,extend_y1 = extended_A[...,0],extended_A[...,1]
     extend_x2,extend_y2 = extended_B[...,0],extended_B[...,1]
 
     x1, y1 = points1[..., 0], points1[..., 1]
     x2, y2 = points2[..., 0], points2[..., 1]
-    
-    # # 计算插值点数，确保每条线都有足够的点数
-    # num_points = 33  # 固定插值的点数为 21
-    
-    # # 生成插值的 x 和 y 坐标，使用 linspace 来进行插值
-    # x_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
-    # y_values = torch.linspace(0, 1, steps=num_points).unsqueeze(0).unsqueeze(0).to(image.device)
-    
-    # # 计算每对点的插值
-    # x_interp = x1.unsqueeze(-1) + (x2 - x1).unsqueeze(-1) * x_values
-    # y_interp = y1.unsqueeze(-1) + (y2 - y1).unsqueeze(-1) * y_values
-    
-    # # 变为整数并确保不越界
-    # x_interp = torch.clamp(x_interp.long(), min=0, max=W-1)
-    # y_interp = torch.clamp(y_interp.long(), min=0, max=H-1)
-    
-    # # 1. 计算 x+1 和 y+1 序列，确保不会越界
-    # x_plus_1 = torch.clamp(x_interp + 1, max=W-1)
-    # y_plus_1 = torch.clamp(y_interp + 1, max=H-1)
 
-   # print(y_plus_1.shape)
-   #  # x_final = torch.cat([x_interp,x_interp,x_plus_1], dim=-1)
-    # y_final = torch.cat([y_interp,y_plus_1,y_interp], dim=-1)
-
-    x_final_1,y_final_1  = extract_point(extend_x1,extend_y1,x1,y1,image,num_points =15 )
-
-    x_final,y_final  = extract_point(x1,y1,x2,y2,image,num_points =20 ) 
-   
-    x_final_2,y_final_2  = extract_point(extend_x2,extend_y2,x2,y2,image,num_points=15 )
-
-  
-
-   
-   
+    x_final_1,y_final_1  = extract_point(extend_x1,extend_y1,x1,y1,image,num_points =15 )#sample extend point one side
+    x_final,y_final  = extract_point(x1,y1,x2,y2,image,num_points =20 ) #sample between point
+    x_final_2,y_final_2  = extract_point(extend_x2,extend_y2,x2,y2,image,num_points=15 )#sample extend point other side
 
     features1 = image[np.arange(B)[:, None, None], x_final_1,  y_final_1]
-
     features = image[np.arange(B)[:, None, None], x_final,  y_final]
-
-    features2 = image[np.arange(B)[:, None, None], x_final_2,  y_final_2]
-    
-    #print(features1.shape)
-    
-    # 3. 将像素值合并为一个序列
-
-    # features = torch.zeros_like(features)#nobetween
-
-    # features1 = torch.zeros_like(features1)
-    # features2 = torch.zeros_like(features2)#noextend
-
+    features2 = image[np.arange(B)[:, None, None], x_final_2,  y_final_2]#extract mask feature
     features = torch.concat([features1,features,features2], dim=2)
 
     
     return features
 
 
-
-
-
 class TopoNet(nn.Module):
     def __init__(self, config, feature_dim):
         super(TopoNet, self).__init__()
         self.config = config
-
-       
 
         self.hidden_dim = 128
         self.heads = 4
@@ -231,7 +161,6 @@ class TopoNet(nn.Module):
         # pairs_valid: [B, N_samples, N_pairs]
         # mask scores:[B,3,512,512]
         B,_,H,W = mask_scores.shape
-        
         point_features = F.relu(self.feature_proj(point_features))
         # gathers pairs
         batch_size, n_samples, n_pairs, _ = pairs.shape
@@ -248,19 +177,9 @@ class TopoNet(nn.Module):
 
         _,N,_ = tgt_points.shape
 
-        
-        
         mask_road_dim = mask_scores[:, 1, :, :] 
-
-        line_features = Top100(src_points, tgt_points, mask_road_dim)#][B,N,64]
-
-        #line_features = F.relu(self.point_proj(line_features))
-
-
-
+        line_features = extendline(src_points, tgt_points, mask_road_dim)#][B,N,64]
         offset_x = tgt_points - src_points
-        offset_y = src_points - tgt_points
-
         ## ablation study
         # [B, N_samples * N_pairs, 2D + 2]
         if self.config.TOPONET_VERSION == 'no_tgt_features':
@@ -269,11 +188,8 @@ class TopoNet(nn.Module):
             pair_features = torch.concat([src_features, tgt_features, torch.zeros_like(offset_x)], dim=2)
         else:
             pair_features = torch.concat([src_features, tgt_features, line_features,offset_x], dim=2)
-        
-        
         # [B, N_samples * N_pairs, D]
         pair_features = F.relu(self.pair_proj(pair_features))
-        
         # attn applies within each local graph sample
         pair_features = pair_features.view(batch_size * n_samples, n_pairs, -1)
         # valid->not a padding
@@ -301,9 +217,6 @@ class TopoNet(nn.Module):
         scores = torch.sigmoid(logits)
 
         return logits, scores
-
-
-
 
 class _LoRA_qkv(nn.Module):
     """In Sam it is implemented as
@@ -340,8 +253,6 @@ class _LoRA_qkv(nn.Module):
         qkv[:, :, :, : self.dim] += new_q
         qkv[:, :, :, -self.dim:] += new_v
         return qkv
-
-
 
 class SAMRoadplus(pl.LightningModule):
     """This is the RelationFormer module that performs object detection"""
@@ -558,7 +469,6 @@ class SAMRoadplus(pl.LightningModule):
                 rel_pos_params = F.interpolate(rel_pos_params, (token_size * 2 - 1, w), mode='bilinear', align_corners=False)
                 new_state_dict[k] = rel_pos_params[0, 0, ...]
         return new_state_dict
-
     
     def forward(self, rgb, graph_points, pairs, valid):
         # rgb: [B, H, W, C]
@@ -643,7 +553,6 @@ class SAMRoadplus(pl.LightningModule):
         mask_scores = mask_scores.permute(0, 2, 3, 1)
         return mask_scores, image_embeddings
     
-
     def infer_toponet(self, image_embeddings, graph_points, pairs, valid,mask_scores):
         # image_embeddings: [B, D, h, w]
         # graph_points: [B, N_points, 2]
@@ -655,190 +564,3 @@ class SAMRoadplus(pl.LightningModule):
         # [B, N_sample, N_pair, 1]
         topo_logits, topo_scores = self.topo_net(graph_points, point_features, graph_points, point_features, pairs, valid,mask_scores)
         return topo_scores
-
-
-    def training_step(self, batch, batch_idx):
-        # masks: [B, H, W]
-        rgb, keypoint_mask, road_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
-        graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
-        # [B, H, W, 2]
-        mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
-        gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
-        mask_loss = self.mask_criterion(mask_logits, gt_masks)
-
-        topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
-        # [B, N_samples, N_pairs, 1]
-        topo_loss = self.topo_criterion(topo_logits, topo_gt.unsqueeze(-1).to(torch.float32))
-
-        # ### DEBUG NAN
-        # for nan_index in torch.nonzero(torch.isnan(topo_loss[:, :, :, 0])):
-        
-            # print('nan index: B, Sample, Pair')
-            # print(nan_index)
-            # import pdb
-            # pdb.set_trace()
-
-        #### DEBUG NAN
-
-
-        topo_loss *= topo_loss_mask.unsqueeze(-1)
-        topo_loss = torch.nansum(torch.nansum(topo_loss) / topo_loss_mask.sum())
-        #topo_loss = topo_loss.sum() / topo_loss_mask.sum()
-
-        loss = mask_loss + topo_loss
-
-        if torch.any(torch.isnan(loss)):
-            print("NaN detected in loss. Using default loss value.")
-            loss = torch.tensor(0.0, device=loss.device)  # 替代默认值
-
-        self.log('train_mask_loss', mask_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True)
-        return loss
-
-
-    def validation_step(self, batch, batch_idx):
-        # masks: [B, H, W]
-        rgb, keypoint_mask, road_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
-        graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
-        # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
-        mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
-        gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
-
-
-        mask_loss = self.mask_criterion(mask_logits, gt_masks)
-
-        topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
-        # [B, N_samples, N_pairs, 1]
-        topo_loss = self.topo_criterion(topo_logits, topo_gt.unsqueeze(-1).to(torch.float32))
-        topo_loss *= topo_loss_mask.unsqueeze(-1)
-        topo_loss = topo_loss.sum() / topo_loss_mask.sum()
-        loss = mask_loss + topo_loss
-        self.log('val_mask_loss', mask_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-
-        # Log images
-        if batch_idx == 0:
-            max_viz_num = 4
-            viz_rgb = rgb[:max_viz_num, :, :]
-            viz_pred_keypoint = mask_scores[:max_viz_num, :, :, 0]
-            viz_pred_road = mask_scores[:max_viz_num, :, :, 1]
-            viz_gt_keypoint = keypoint_mask[:max_viz_num, ...]
-            viz_gt_road = road_mask[:max_viz_num, ...]
-            
-            columns = ['rgb', 'gt_keypoint', 'gt_road', 'pred_keypoint', 'pred_road']
-            data = [[wandb.Image(x.cpu().numpy()) for x in row] for row in list(zip(viz_rgb, viz_gt_keypoint, viz_gt_road, viz_pred_keypoint, viz_pred_road))]
-            self.logger.log_table(key='viz_table', columns=columns, data=data)
-
-        self.keypoint_iou.update(mask_scores[..., 0], keypoint_mask)
-        self.road_iou.update(mask_scores[..., 1], road_mask)
-        
-        valid = valid.to(torch.int32)
-        topo_gt = (1 - valid) * -1 + valid * topo_gt
-        self.topo_f1.update(topo_scores, topo_gt.unsqueeze(-1))
-        
-
-    def on_validation_epoch_end(self):
-        keypoint_iou = self.keypoint_iou.compute()
-        road_iou = self.road_iou.compute()
-        topo_f1 = self.topo_f1.compute()
-        self.log("keypoint_iou", keypoint_iou)
-        self.log("road_iou", road_iou)
-        self.log("topo_f1", topo_f1)
-        print(keypoint_iou)
-        print(road_iou)
-        print(topo_f1)
-        self.keypoint_iou.reset()
-        self.road_iou.reset()
-        self.topo_f1.reset()
-
-    def test_step(self, batch, batch_idx):
-        # masks: [B, H, W]
-        rgb, keypoint_mask, road_mask = batch['rgb'], batch['keypoint_mask'], batch['road_mask']
-        graph_points, pairs, valid = batch['graph_points'], batch['pairs'], batch['valid']
-
-        # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
-        mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
-
-        topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
-
-        self.keypoint_pr_curve.update(mask_scores[..., 0], keypoint_mask.to(torch.int32))
-        self.road_pr_curve.update(mask_scores[..., 1], road_mask.to(torch.int32))
-        
-        valid = valid.to(torch.int32)
-        topo_gt = (1 - valid) * -1 + valid * topo_gt
-        self.topo_pr_curve.update(topo_scores, topo_gt.unsqueeze(-1).to(torch.int32))
-
-    def on_test_end(self):
-        def find_best_threshold(pr_curve_metric, category):
-            print(f'======= {category} ======')   
-            precision, recall, thresholds = pr_curve_metric.compute()
-            f1_scores = 2 * (precision * recall) / (precision + recall)
-            best_threshold_index = torch.argmax(f1_scores)
-            best_threshold = thresholds[best_threshold_index]
-            best_precision = precision[best_threshold_index]
-            best_recall = recall[best_threshold_index]
-            best_f1 = f1_scores[best_threshold_index]
-            print(f'Best threshold {best_threshold}, P={best_precision} R={best_recall} F1={best_f1}')
-        
-        print('======= Finding best thresholds ======')
-        find_best_threshold(self.keypoint_pr_curve, 'keypoint')
-        find_best_threshold(self.road_pr_curve, 'road')
-        find_best_threshold(self.topo_pr_curve, 'topo')
-
-
-    def configure_optimizers(self):
-        param_dicts = []
-
-        if not self.config.FREEZE_ENCODER and not self.config.ENCODER_LORA:
-            encoder_params = {
-                'params': [p for k, p in self.image_encoder.named_parameters() if 'image_encoder.'+k in self.matched_param_names],
-                'lr': self.config.BASE_LR * self.config.ENCODER_LR_FACTOR,
-            }
-            param_dicts.append(encoder_params)
-        if self.config.ENCODER_LORA:
-            # LoRA params only
-            encoder_params = {
-                'params': [p for k, p in self.image_encoder.named_parameters() if 'qkv.linear_' in k],
-                'lr': self.config.BASE_LR,
-            }
-            param_dicts.append(encoder_params)
-        
-        if self.config.USE_SAM_DECODER:
-            matched_decoder_params = {
-                'params': [p for k, p in self.mask_decoder.named_parameters() if 'mask_decoder.'+k in self.matched_param_names],
-                'lr': self.config.BASE_LR * 0.1
-            }
-            fresh_decoder_params = {
-                'params': [p for k, p in self.mask_decoder.named_parameters() if 'mask_decoder.'+k not in self.matched_param_names],
-                'lr': self.config.BASE_LR
-            }
-            decoder_params = [matched_decoder_params, fresh_decoder_params]
-        else:
-            decoder_params = [{
-                'params': [p for p in self.map_decoder.parameters()],
-                'lr': self.config.BASE_LR
-            }]
-        param_dicts += decoder_params
-
-        topo_net_params = [{
-            'params': [p for p in self.topo_net.parameters()],
-            'lr': self.config.BASE_LR
-        }]
-        param_dicts += topo_net_params
-        
-        for i, param_dict in enumerate(param_dicts):
-            param_num = sum([int(p.numel()) for p in param_dict['params']])
-            print(f'optim param dict {i} params num: {param_num}')
-
-        optimizer = torch.optim.AdamW(param_dicts, lr=self.config.BASE_LR, betas=(0.9, 0.999), weight_decay=0.1)
-        #optimizer = torch.optim.Adam(param_dicts, lr=self.config.BASE_LR)
-        # warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=10)
-        step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[9,], gamma=0.1)
-        return {'optimizer': optimizer, 'lr_scheduler': step_lr}
-

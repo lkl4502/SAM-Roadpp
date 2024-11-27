@@ -11,11 +11,8 @@ import os
 import addict
 import json
 
-
-
 def read_rgb_img(path):
     bgr = cv2.imread(path)
-   # print(bgr)
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     return rgb
 
@@ -38,6 +35,7 @@ def cityscale_data_partition():
         if x % 20 == 8:
             indrange_test.append(x)
     return indrange_train, indrange_validation, indrange_test
+
 def globalscale_data_partition():
     # dataset partition
     indrange_train = []
@@ -60,20 +58,14 @@ def globalscale_data_partition():
         indrange_test_out_domain.append(x)
     return indrange_train, indrange_validation, indrange_test,indrange_test_out_domain
 
-
 def spacenet_data_partition():
     # dataset partition
     with open('../data_split.json','r') as jf:
         data_list = json.load(jf)
-        # data_list = data_list['test'] + data_list['validation'] + data_list['train']
-    # train_list = [tile_index for _, tile_index in data_list['train']]
-    # val_list = [tile_index for _, tile_index in data_list['validation']]
-    # test_list = [tile_index for _, tile_index in data_list['test']]
     train_list = data_list['train']
     val_list = data_list['validation']
     test_list = data_list['test']
     return train_list, val_list, test_list
-
 
 def get_patch_info_one_img(image_index, image_size, sample_margin, patch_size, patches_per_edge):
     patch_info = []
@@ -87,7 +79,6 @@ def get_patch_info_one_img(image_index, image_size, sample_margin, patch_size, p
                 (image_index, (x, y), (x + patch_size, y + patch_size))
             )
     return patch_info
-
 
 class GraphLabelGenerator():
     def __init__(self, config, full_graph, coord_transform):
@@ -245,16 +236,9 @@ class GraphLabelGenerator():
         ], dtype=np.float32)
         nmsed_points = nmsed_points @ trans.T @ np.linalg.matrix_power(rot.T, rot_index) @ np.linalg.inv(trans.T)
         nmsed_points = nmsed_points[:, :2]
-            
-        # Add noise
-        noise_scale = 1.0  # pixels
-        nmsed_points += np.random.normal(0.0, noise_scale, size=nmsed_points.shape)
 
         return nmsed_points, samples
-    
-
-
-        
+         
 def graph_collate_fn(batch):
     keys = batch[0].keys()
     collated = {}
@@ -271,8 +255,6 @@ def graph_collate_fn(batch):
         else:
             collated[key] = torch.stack([item[key] for item in batch], dim=0)
     return collated
-
-
 
 class SatMapDataset(Dataset):
     def __init__(self, config, is_train, dev_run=False):
@@ -296,6 +278,7 @@ class SatMapDataset(Dataset):
             # coord-transform = (r, c) -> (x, y)
             # takes [N, 2] points
             coord_transform = lambda v : v[:, ::-1]
+
         elif self.config.DATASET == 'globalscale':
             self.IMAGE_SIZE = 2048
             # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
@@ -333,8 +316,8 @@ class SatMapDataset(Dataset):
 
         train_split = train + val
         test_split = test
-
         tile_indices = train_split if self.is_train else test_split
+        
         self.tile_indices = tile_indices
 
         self.trainnum = train
@@ -385,13 +368,10 @@ class SatMapDataset(Dataset):
 
     def __len__(self):
         if self.is_train:
-            # Pixel seen in one epoch ~ 17 x total pixels in training set
             if self.config.DATASET == 'cityscale':
                 num_patches_per_image = max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2
-               
-                return len(self.trainnum) * num_patches_per_image
-
-                
+           
+                return len(self.trainnum) * num_patches_per_image             
             elif self.config.DATASET == 'spacenet':
                 
                 num_patches_per_image = max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2

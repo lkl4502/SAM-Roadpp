@@ -33,9 +33,6 @@ import os
 import matplotlib.pyplot as plt
 
 import torch
-#torch.set_float32_matmul_precision('high')  # 或 'medium' 以适当折衷性能和精度
-
-
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
@@ -58,12 +55,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     config = load_config(args.config)
 
-    
-    # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
     
-
     net = SAMRoadplus(config)
 
     val_ds = SatMapDataset(config, is_train=False, dev_run=False)
