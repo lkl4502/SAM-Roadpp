@@ -142,7 +142,6 @@ class GraphLabelGenerator():
         query_box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
         patch_indices_all = set(self.graph_rtee.intersection(query_box))
         patch_indices = patch_indices_all - self.exclude_indices
-        #patch_indices = patch_indices_all  #不放弃cross点
         # Use NMS to downsample, params shall resemble inference time
         patch_indices = np.array(list(patch_indices))
         if len(patch_indices) == 0:
@@ -153,23 +152,19 @@ class GraphLabelGenerator():
             fake_points = np.array([[0.0, 0.0]], dtype=np.float32)
             fake_sample = ([[0, 0]] * max_nbr_queries, [False] * max_nbr_queries, [False] * max_nbr_queries)
             return fake_points, [fake_sample] * sample_num
-
-        patch_points = self.subdivide_points[patch_indices, :]
-        
+        patch_points = self.subdivide_points[patch_indices, :]     
         # random scores to emulate different random configurations that all share a
         # similar spacing between sampled points
         # raise scores for intersction points so they are always kept
         nms_scores = np.random.uniform(low=0.9, high=1.0, size=patch_indices.shape[0])
         nms_score_override = self.nms_score_override[patch_indices]
         nms_scores = np.maximum(nms_scores, nms_score_override)
-        nms_radius = self.config.ROAD_NMS_RADIUS
-        
+        nms_radius = self.config.ROAD_NMS_RADIUS    
         # kept_indces are into the patch_points array
         nmsed_points, kept_indices = graph_utils.nms_points(patch_points, nms_scores, radius=nms_radius, return_indices=True)
         # now this is into the subdivide graph
         nmsed_indices = patch_indices[kept_indices]
         nmsed_point_num = nmsed_points.shape[0]
-
 
         sample_num = self.config.TOPO_SAMPLE_NUM  # has to be greater than 1
         sample_weights = self.sample_weights[nmsed_indices]
@@ -179,7 +174,7 @@ class GraphLabelGenerator():
             size=sample_num, replace=True, p=sample_weights / np.sum(sample_weights))
         # indices into the subdivided graph
         sample_indices = nmsed_indices[sample_indices_in_nmsed]
-        
+
         radius = self.config.NEIGHBOR_RADIUS
         max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES  # has to be greater than 1
         nmsed_kdtree = scipy.spatial.KDTree(nmsed_points)
@@ -188,35 +183,28 @@ class GraphLabelGenerator():
         # k+1 because the nearest one is always self
         knn_d, knn_idx = nmsed_kdtree.query(sampled_points, k=max_nbr_queries + 1, distance_upper_bound=radius)
 
-
         samples = []
-
         for i in range(sample_num):
             source_node = sample_indices[i]
             valid_nbr_indices = knn_idx[i, knn_idx[i, :] < nmsed_point_num]
             valid_nbr_indices = valid_nbr_indices[1:] # the nearest one is self so remove
             target_nodes = [nmsed_indices[ni] for ni in valid_nbr_indices]  
-
             ### BFS to find immediate neighbors on graph
             reached_nodes = graph_utils.bfs_with_conditions(self.full_graph_subdivide, source_node, set(target_nodes), radius // self.subdivide_resolution)
             shall_connect = [t in reached_nodes for t in target_nodes]
             ###
-
             pairs = []
             valid = []
             source_nmsed_idx = sample_indices_in_nmsed[i]
             for target_nmsed_idx in valid_nbr_indices:
                 pairs.append((source_nmsed_idx, target_nmsed_idx))
                 valid.append(True)
-
             # zero-pad
             for i in range(len(pairs), max_nbr_queries):
                 pairs.append((source_nmsed_idx, source_nmsed_idx))
                 shall_connect.append(False)
                 valid.append(False)
-
             samples.append((pairs, shall_connect, valid))
-
         # Transform points
         # [N, 2]
         nmsed_points -= np.array([x0, y0])[np.newaxis, :]
@@ -236,7 +224,6 @@ class GraphLabelGenerator():
         ], dtype=np.float32)
         nmsed_points = nmsed_points @ trans.T @ np.linalg.matrix_power(rot.T, rot_index) @ np.linalg.inv(trans.T)
         nmsed_points = nmsed_points[:, :2]
-
         return nmsed_points, samples
          
 def graph_collate_fn(batch):
