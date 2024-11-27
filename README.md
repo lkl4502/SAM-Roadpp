@@ -126,7 +126,7 @@ We sincerely appreciate the authors of the following codebases which made this p
 
 ## TODO List
 - [√] Basic instructions
-- [ ] Organize configs
+- [×] Organize configs
 - [√] Add dependency list
-- [ ] Add demos
-- [ ] Add trained checkpoints
+- [×] Add demos
+- [×] Add trained checkpoints
