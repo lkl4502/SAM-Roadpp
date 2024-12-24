@@ -21,7 +21,7 @@
 
 <div>
     <h4 align="center">
-        • <a href="https://github.com/earth-insights/samroadplus" target='_blank'>[Project]</a> • <a href="https://arxiv.org/abs/2410.01768" target='_blank'>[arXiv]</a> • 
+        • <a href="https://github.com/earth-insights/samroadplus" target='_blank'>[Project]</a> • <a href="https://arxiv.org/abs/2411.16733" target='_blank'>[arXiv]</a> • 
     </h4>
 </div>
 <img src="https://github.com/earth-insights/samroadplus/blob/main/img/overview.PNG" width="100%"/>
