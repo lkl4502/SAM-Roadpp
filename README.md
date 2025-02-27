@@ -125,8 +125,8 @@ We sincerely appreciate the authors of the following codebases which made this p
 - [Detectron2](https://github.com/facebookresearch/detectron2)  
 
 ## TODO List
-- [√] Basic instructions
-- [×] Organize configs
-- [√] Add dependency list
-- [×] Add demos
-- [×] Add trained checkpoints
+- [x] Basic instructions
+- [ ] Organize configs
+- [x] Add dependency list
+- [ ] Add demos
+- [ ] Add trained checkpoints
