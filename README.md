@@ -61,9 +61,9 @@ Put them in the main directory, structure like:
 --spacenet  
 ---RGB_1.0_meter  
 ```
-and run python generate_labes.py under both dirs.
+And run python generate_labes.py under both dirs.
 
-for Global-scale, refer to cityscale for data preparation. And please download the Global-scale datasets from [link](https://pan.baidu.com/s/1_bWmY3W8GVvizX3W2jLrWg?pwd=a9p7).
+For Global-scale, refer to cityscale for data preparation. And you can download the Global-scale datasets from [link](https://pan.baidu.com/s/1_bWmY3W8GVvizX3W2jLrWg?pwd=a9p7).
 ### Training
 City-scale dataset:  
 
