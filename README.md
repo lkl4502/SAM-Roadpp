@@ -64,7 +64,7 @@ Put them in the main directory, structure like:
 and run python generate_labes.py under both dirs.
 
 for Global-scale, refer to cityscale for data preparation. And our Global-scale datasets will be publicly available soon.
-
+(Please download the global-scale dataset from [link](https://pan.baidu.com/s/1_bWmY3W8GVvizX3W2jLrWg?pwd=a9p7))
 ### Training
 City-scale dataset:  
 
