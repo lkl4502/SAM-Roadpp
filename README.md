@@ -21,7 +21,7 @@
 
 <div>
     <h4 align="center">
-        • <a href="https://github.com/earth-insights/samroadplus" target='_blank'>[Project]</a> • <a href="https://arxiv.org/abs/2411.16733" target='_blank'>[arXiv]</a> • • <a href="https://pan.baidu.com/s/1_bWmY3W8GVvizX3W2jLrWg?pwd=a9p7" target='_blank'>[Dataset]</a>
+        • <a href="https://github.com/earth-insights/samroadplus" target='_blank'>[Project]</a> • <a href="https://arxiv.org/abs/2411.16733" target='_blank'>[arXiv]</a> • <a href="https://pan.baidu.com/s/1_bWmY3W8GVvizX3W2jLrWg?pwd=a9p7" target='_blank'>[Dataset]</a> • 
     </h4>
 </div>
 <img src="https://github.com/earth-insights/samroadplus/blob/main/img/overview.PNG" width="100%"/>
