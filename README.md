@@ -4,7 +4,7 @@
 
 
 <div>
-    <a href='https://github.com/Pancool303' target='_blank'>Pan Yin</a><sup>1*</sup>&emsp;
+    <a href='https://github.com/Morefree303' target='_blank'>Pan Yin</a><sup>1*</sup>&emsp;
     <a href='https://likyoo.github.io/' target='_blank'>Kaiyu Li</a><sup>1*</sup>&emsp;
     <a href='https://gr.xjtu.edu.cn/en/web/caoxiangyong' target='_blank'>Xiangyong Cao</a><sup>✉1</sup>&emsp;
     <a href='https://scholar.google.com/citations?hl=zh-CN&user=1SHd5ygAAAAJ' target='_blank'>Jing Yao</a><sup>2</sup>&emsp;
