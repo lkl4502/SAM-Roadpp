@@ -1,0 +1,24 @@
+name: 🔬 Experiment Report
+description: Experiment Tracking, Execution, and Results
+title: "[Experiment] "
+labels: ["🔬 Experiment"]
+body:
+  - type: textarea
+    attributes:
+      label: 🌈 Background
+      description: The purpose or reason for this experiment?
+      placeholder: Anything you want to add?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 📋 Plan
+      description: The experiment steps and the tasks to be done?
+      placeholder: "- [ ] ..."
+
+  - type: textarea
+    attributes:
+      label: 👀 See Also
+      description: Any references, related experiments, or additional information to note?
+      placeholder: Please provide any relevant materials
