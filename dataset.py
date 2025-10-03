@@ -10,6 +10,7 @@ import pickle
 import os
 import addict
 import json
+import os.path as osp
 
 def read_rgb_img(path):
     bgr = cv2.imread(path)
@@ -244,17 +245,17 @@ def graph_collate_fn(batch):
     return collated
 
 class SatMapDataset(Dataset):
-    def __init__(self, config, is_train, dev_run=False):
+    def __init__(self, config, is_train, data_root, dev_run=False):
         self.config = config
         assert self.config.DATASET in {'cityscale','globalscale', 'spacenet'}
         if self.config.DATASET == 'cityscale':
             self.IMAGE_SIZE = 2048
             # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
             self.SAMPLE_MARGIN = 64
-            rgb_pattern = '../region_{}_sat.png'
-            keypoint_mask_pattern = '../keypoint_mask_{}.png'
-            road_mask_pattern = '../road_mask_{}.png'
-            gt_graph_pattern = '../region_{}_refine_gt_graph.p'
+            rgb_pattern = osp.join(data_root, 'cityscale/20cities/region_{}_sat.png')
+            keypoint_mask_pattern = osp.join(data_root, 'cityscale/processed/keypoint_mask_{}.png')
+            road_mask_pattern = osp.join(data_root, 'cityscale/processed/road_mask_{}.png')
+            gt_graph_pattern = osp.join(data_root, 'cityscale/20cities/region_{}_refine_gt_graph.p')
 
             train, val, test = cityscale_data_partition()
         
@@ -262,14 +263,15 @@ class SatMapDataset(Dataset):
             # takes [N, 2] points
             coord_transform = lambda v : v[:, ::-1]
 
+        # 경로 수정 필요
         elif self.config.DATASET == 'globalscale':
             self.IMAGE_SIZE = 2048
             # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
             self.SAMPLE_MARGIN = 64
-            rgb_pattern = '../region_{}_sat.png'
-            keypoint_mask_pattern = '../keypoint_mask_{}.png'
-            road_mask_pattern = '../road_mask_{}.png'
-            gt_graph_pattern = '../region_{}_refine_gt_graph.p'
+            rgb_pattern = osp.join(data_root, 'globalscale/data/region_{}_sat.png')
+            keypoint_mask_pattern = osp.join(data_root, 'globalscale/processed/keypoint_mask_{}.png')
+            road_mask_pattern = osp.join(data_root, 'globalscale/processed/road_mask_{}.png')
+            gt_graph_pattern = osp.join(data_root, 'globalscale/data/region_{}_refine_gt_graph.p')
 
             train, val, test, test_out = globalscale_data_partition()
             
@@ -280,10 +282,10 @@ class SatMapDataset(Dataset):
         elif self.config.DATASET == 'spacenet':
             self.IMAGE_SIZE = 400
             self.SAMPLE_MARGIN = 0
-            rgb_pattern = '../{}__rgb.png'
-            keypoint_mask_pattern = '../processed/keypoint_mask_{}.png'
-            road_mask_pattern = '../processed/road_mask_{}.png'
-            gt_graph_pattern = '../{}__gt_graph.p'
+            rgb_pattern = osp.join(data_root, 'RGB_1.0_meter/{}__rgb.png')
+            keypoint_mask_pattern = osp.join(data_root, 'RGB_1.0_meter/processed/keypoint_mask_{}.png')
+            road_mask_pattern = osp.join(data_root, 'RGB_1.0_meter/processed/road_mask_{}.png')
+            gt_graph_pattern = osp.join(data_root, 'RGB_1.0_meter/{}__gt_graph.p')
             
             train, val, test = spacenet_data_partition()
 
