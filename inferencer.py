@@ -86,6 +86,11 @@ def infer_one_img(net, img, config):
             mask_scores, patch_img_features = net.infer_masks_and_img_features(batch_img_patches)
             img_features.append(patch_img_features)
             
+            # 디버깅: 마스크 점수 확인
+            print(f"Batch {batch_index}: mask_scores shape = {mask_scores.shape}")
+            print(f"mask_scores range: [{mask_scores.min():.4f}, {mask_scores.max():.4f}]")
+            print(f"mask_scores mean: {mask_scores.mean():.4f}")
+            
             mask_scores11 = mask_scores.permute(0, 3, 1, 2)#(0,3,1,2)
             
             img_mask.append(mask_scores11)
@@ -99,11 +104,20 @@ def infer_one_img(net, img, config):
 
     fused_keypoint_mask /= pixel_counter
     fused_road_mask /= pixel_counter
+    
+    # 디버깅: 융합된 마스크 확인
+    print(f"Fused masks before scaling:")
+    print(f"keypoint_mask range: [{fused_keypoint_mask.min():.4f}, {fused_keypoint_mask.max():.4f}]")
+    print(f"road_mask range: [{fused_road_mask.min():.4f}, {fused_road_mask.max():.4f}]")
+    
     # range 0-1 -> 0-255
     fused_keypoint_mask = (fused_keypoint_mask * 255).to(torch.uint8).cpu().numpy()
     fused_road_mask = (fused_road_mask * 255).to(torch.uint8).cpu().numpy()
-
-    print(fused_road_mask.shape)
+    
+    print(f"After scaling to 0-255:")
+    print(f"keypoint_mask range: [{fused_keypoint_mask.min()}, {fused_keypoint_mask.max()}]")
+    print(f"road_mask range: [{fused_road_mask.min()}, {fused_road_mask.max()}]")
+    print(f"road_mask shape: {fused_road_mask.shape}")
     graph_points = graph_extraction.extract_graph_points(fused_keypoint_mask, fused_road_mask, config)
     if graph_points.shape[0] == 0:
         print(1)
@@ -225,7 +239,7 @@ if __name__ == "__main__":
 
     if config.DATASET == 'cityscale':
         _, _, test_img_indices = cityscale_data_partition()
-        rgb_pattern = '../region_{}_sat.png'
+        rgb_pattern = '/home/lkl4502/data/Aerial/RoadGraph/cityscale/20cities/region_{}_sat.png'
 
     elif config.DATASET == 'globalscale_outdomain':
         _, _, _,test_img_indices = globalscale_data_partition()   
@@ -237,7 +251,7 @@ if __name__ == "__main__":
 
     elif config.DATASET == 'spacenet':
         _, _, test_img_indices = spacenet_data_partition()
-        rgb_pattern = '../{}__rgb.png'
+        rgb_pattern = '/home/lkl4502/data/Aerial/RoadGraph/spacenet/RGB_1.0_meter/{}__rgb.png'
    
     output_dir_prefix = './save/infer_'
     if args.output_dir:
