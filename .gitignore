@@ -24,6 +24,8 @@ output/
 outputs/
 runs/
 checkpoints/
+save/
+lightning_logs/
 
 # 환경 변수 파일
 .env
