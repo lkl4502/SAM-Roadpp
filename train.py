@@ -40,11 +40,16 @@ if __name__ == "__main__":
     wandb.login(key=os.getenv("WANDB_API_KEY"))
     wandb.init(
         # set the wandb project where this run will be logged
-        entity=os.getenv("WANDB_TEAM_NAME"),
-        project=os.getenv("WANDB_PROJECT_NAME"),
-        name=os.getenv("WANDB_EXPERIMENT_NAME"),
+        entity=config.WANDB_TEAM_NAME,
+        project=config.WANDB_PROJECT_NAME,
+        name=config.WANDB_EXPERIMENT_NAME,
         # track hyperparameters and run metadata
-        config=config,
+        config={
+            k: v
+            for k, v in config.items()
+            if k
+            not in ["WANDB_TEAM_NAME", "WANDB_PROJECT_NAME", "WANDB_EXPERIMENT_NAME"]
+        },
         # disable wandb if debugging
         mode="disabled" if dev_run else None,
     )
