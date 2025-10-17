@@ -26,7 +26,7 @@ def visualize_image_and_graph(img, nodes, edges, viz_img_size=512):
             (15, 160, 253),
             4,
         )
-    
+
     # Draw nodes
     for node in nodes:
         x, y = node * viz_img_size
@@ -81,7 +81,7 @@ def visualize_pred_gt_pair(result):
     return pair_img
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Deserializing the list from the binary file
     with open("inference_results.pickle", "rb") as file:
         inference_results = pickle.load(file)

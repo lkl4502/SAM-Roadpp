@@ -1,18 +1,19 @@
-from argparse import ArgumentParser
-import numpy as np
+import os
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from utils import load_config
-from dataset import SatMapDataset, graph_collate_fn
-from model import SAMRoadplus
 import wandb
 import lightning.pytorch as pl
+
+from utils import load_config
+from model import SAMRoadplus
 from dotenv import load_dotenv
-from lightning.pytorch.callbacks import ModelCheckpoint
+from argparse import ArgumentParser
+from dataset import SatMapDataset, graph_collate_fn
+from torch.utils.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
-from lightning.pytorch.callbacks import LearningRateMonitor
-import os
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+
+# import numpy as np
+# import torch.nn as nn
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = ''  # GPU 사용을 위해 주석 처리
 
@@ -23,10 +24,10 @@ parser.add_argument(
     help="config file (.yml) containing the hyper-parameters for training. "
     "If None, use the nnU-Net config. See /config for examples.",
 )
-parser.add_argument(
+parser.add_argument(  # 학습 재시작 용도
     "--resume", default="", help="checkpoint of the last epoch of the model "
 )
-parser.add_argument("--precision", default=16, help="32 or 16")
+parser.add_argument("--precision", default=16, help="32 or 16")  # memory vs precision
 parser.add_argument("--fast_dev_run", default=False, action="store_true")
 parser.add_argument("--dev_run", default=False, action="store_true")
 
@@ -35,27 +36,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
     config = load_config(args.config)
     dev_run = args.dev_run or args.fast_dev_run
+
     load_dotenv()
-    # start a new wandb run to track this script
     wandb.login(key=os.getenv("WANDB_API_KEY"))
     wandb.init(
-        # set the wandb project where this run will be logged
         entity=config.WANDB_TEAM_NAME,
         project=config.WANDB_PROJECT_NAME,
         name=config.WANDB_EXPERIMENT_NAME,
-        # track hyperparameters and run metadata
         config={
             k: v
             for k, v in config.items()
             if k
             not in ["WANDB_TEAM_NAME", "WANDB_PROJECT_NAME", "WANDB_EXPERIMENT_NAME"]
         },
-        # disable wandb if debugging
         mode="disabled" if dev_run else None,
     )
-    # Good when model architecture/input shape are fixed.
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.enabled = True
+
+    torch.backends.cudnn.benchmark = True  # 입력 크기 고정이면 최적화 알고리즘
+    torch.backends.cudnn.enabled = True  # cuDNN 활성화, GPU 가속
 
     net = SAMRoadplus(config)
 

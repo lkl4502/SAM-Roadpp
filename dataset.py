@@ -1,16 +1,18 @@
-import numpy as np
-import torch
-from torch.utils.data import Dataset
 import cv2
 import math
-import graph_utils
+import json
+import torch
 import rtree
 import scipy
 import pickle
-import os
-import addict
-import json
+import graph_utils
+import numpy as np
 import os.path as osp
+
+from torch.utils.data import Dataset
+
+# import os
+# import addict
 
 
 def read_rgb_img(path):
@@ -33,9 +35,9 @@ def cityscale_data_partition():
     Cityscale 데이터셋의 인덱스를 train, validation, test로 분할하는 함수.
 
     총 180개의 인덱스를 아래와 같이 분할한다:
-      - train: 각 10개 그룹 중 앞 8개 (x%10 < 8)
-      - validation: 각 20개 그룹(0~19, 20~39...)에서 18번째 인덱스 (x%20 == 18)
-      - test: 각 10개 그룹 중 9번째 (x%10 == 9) 및 각 20개 그룹 중 8번째 (x%20 == 8)
+      - train: 각 10개 그룹 중 앞 8개 (x % 10 < 8)
+      - validation: 각 20개 그룹(0 ~ 19, 20 ~ 39...)에서 18번째 인덱스 (x % 20 == 18)
+      - test: 각 10개 그룹 중 9번째 (x % 10 == 9) 및 각 20개 그룹 중 8번째 (x % 20 == 8)
 
     Returns:
         tuple: (train 인덱스 리스트, validation 인덱스 리스트, test 인덱스 리스트)
@@ -63,86 +65,126 @@ def cityscale_data_partition():
 
 
 def globalscale_data_partition():
-    # dataset partition
-    indrange_train = []
-    indrange_test = []
-    indrange_test_out_domain = []
-    indrange_validation = []
-    # 0-2374 train
-    # 2375-2713 val
-    # 2714-3337 indomain
+    """
+    글로벌 스케일 데이터셋의 인덱스를 train, validation, test, out-domain test로 분할하는 함수.
+
+    데이터셋 인덱스 할당:
+      - train: 0 ~ 2374 (총 2375개)
+      - validation: 2375 ~ 2713 (총 339개)
+      - test (in-domain): 2714 ~ 3337 (총 624개)
+      - test (out-domain): 0 ~ 129 (총 130개, 별도로 지정되어 있음)
+
+    Returns:
+        tuple: (train 인덱스 리스트, validation 인덱스 리스트, test 인덱스 리스트, out-domain test 인덱스 리스트)
+    """
+    indrange_train = []  # 학습용 인덱스 리스트
+    indrange_test = []  # 테스트(in-domain) 인덱스 리스트
+    indrange_test_out_domain = []  # 테스트(out-domain) 인덱스 리스트
+    indrange_validation = []  # 검증 인덱스 리스트
+
+    # 0 ~ 2374: train set
     for x in range(2375):
         indrange_train.append(x)
 
+    # 2375 ~ 2713: validation set
     for x in range(2375, 2714):
         indrange_validation.append(x)
 
+    # 2714 ~ 3337: test set (in-domain)
     for x in range(2714, 3338):
         indrange_test.append(x)
 
+    # 0 ~ 129: test set (out-domain, 별도로 수집된 인덱스)
     for x in range(130):
         indrange_test_out_domain.append(x)
+
     return indrange_train, indrange_validation, indrange_test, indrange_test_out_domain
 
 
 def spacenet_data_partition():
-    # dataset partition
-    with open(
-        "/home/lkl4502/data/Aerial/RoadGraph/spacenet/data_split.json", "r"
-    ) as jf:
+    """
+    SpaceNet 데이터셋의 인덱스를 train, validation, test로 분할하는 함수.
+
+    Returns:
+        tuple: (train 인덱스 리스트, validation 인덱스 리스트, test 인덱스 리스트)
+    """
+
+    with open("/data2/Aerial/RoadGraph/spacenet/data_split.json", "r") as jf:
         data_list = json.load(jf)
+
+    # 학습, 검증, 테스트 인덱스 리스트 추출
     train_list = data_list["train"]
     val_list = data_list["validation"]
     test_list = data_list["test"]
+
+    # 결과 반환
     return train_list, val_list, test_list
 
 
 def get_patch_info_one_img(
     image_index, image_size, sample_margin, patch_size, patches_per_edge
 ):
+    """
+    한 장의 이미지에서 패치 영역들의 정보를 계산하는 함수.
+
+    Args:
+        image_index (int): 이미지 인덱스 (배치 내 혹은 전체 이미지 중 몇 번째 이미지인지).
+        image_size (int): 이미지 한 변의 픽셀 크기 (정사각형 이미지를 가정).
+        sample_margin (int): 이미지 테두리에서 패치 추출 시 띄울 여백(마진, 픽셀 단위).
+        patch_size (int): 추출할 패치 한 변의 픽셀 크기.
+        patches_per_edge (int): 한 변을 따라 몇 개의 패치를 추출할지.
+
+    Returns:
+        list: (image_index, (좌상단(x, y)), (우하단(x, y))) 형태의 튜플 리스트.
+    """
+
     patch_info = []
+
+    # 패치 좌상단 좌표의 최소, 최대 범위 설정
     sample_min = sample_margin
     sample_max = image_size - (patch_size + sample_margin)
+
+    # 패치 좌상단 좌표들을 동일 간격으로 샘플링
     eval_samples = np.linspace(start=sample_min, stop=sample_max, num=patches_per_edge)
     eval_samples = [round(x) for x in eval_samples]
+
+    # 모든 x, y 조합에 대해 패치 좌표 정보 생성
     for x in eval_samples:
         for y in eval_samples:
+            # (이미지 인덱스, (좌상단 좌표), (우하단 좌표)) 형태로 저장
             patch_info.append((image_index, (x, y), (x + patch_size, y + patch_size)))
+
     return patch_info
 
 
 class GraphLabelGenerator:
     def __init__(self, config, full_graph, coord_transform):
         self.config = config
-        # full_graph: sat2graph format
-        # coord_transform: lambda, [N, 2] array -> [N, 2] array
-        # convert to igraph for high performance
         self.full_graph_origin = graph_utils.igraph_from_adj_dict(
             full_graph, coord_transform
         )
-        # find crossover points, we'll avoid predicting these as keypoints
+
+        # crossover point 탐색
         self.crossover_points = graph_utils.find_crossover_points(
             self.full_graph_origin
         )
-        # subdivide version
-        # TODO: check proper resolution
+
+        # 그래프 세분화
         self.subdivide_resolution = 4
         self.full_graph_subdivide = graph_utils.subdivide_graph(
             self.full_graph_origin, self.subdivide_resolution
         )
-        # np array, maybe faster
+
         self.subdivide_points = np.array(self.full_graph_subdivide.vs["point"])
-        # pre-build spatial index
-        # rtree for box queries
+
         self.graph_rtee = rtree.index.Index()
         for i, v in enumerate(self.subdivide_points):
             x, y = v
-            # hack to insert single points
-            self.graph_rtee.insert(i, (x, y, x, y))
-        # kdtree for spherical query
+            self.graph_rtee.insert(i, (x, y, x, y))  # point 삽입
+
         self.graph_kdtree = scipy.spatial.KDTree(self.subdivide_points)
 
-        # pre-exclude points near crossover points
+        # crossover 점들 학습 제외
         crossover_exclude_radius = 4
         exclude_indices = set()
         for p in self.crossover_points:
@@ -152,19 +194,15 @@ class GraphLabelGenerator:
             exclude_indices.update(nearby_indices)
         self.exclude_indices = exclude_indices
 
-        # Find intersection points, these will always be kept in nms
+        # 교차로는 항상 학습에 중요하기 때문에 가중치 부여
         itsc_indices = set()
         point_num = len(self.full_graph_subdivide.vs)
         for i in range(point_num):
             if self.full_graph_subdivide.degree(i) != 2:
                 itsc_indices.add(i)
         self.nms_score_override = np.zeros((point_num,), dtype=np.float32)
-        self.nms_score_override[np.array(list(itsc_indices))] = (
-            2.0  # itsc points will always be kept
-        )
+        self.nms_score_override[np.array(list(itsc_indices))] = 2.0
 
-        # Points near crossover and intersections are interesting.
-        # they will be more frequently sampled
         interesting_indices = set()
         interesting_radius = 32
         # near itsc
@@ -206,7 +244,7 @@ class GraphLabelGenerator:
         nms_scores = np.random.uniform(low=0.9, high=1.0, size=patch_indices.shape[0])
         nms_score_override = self.nms_score_override[patch_indices]
         nms_scores = np.maximum(nms_scores, nms_score_override)
-        nms_radius = self.config.ROAD_NMS_RADIUS
+        nms_radius = self.config.ROAD_NMS_RADIUS  # 16
         # kept_indces are into the patch_points array
         nmsed_points, kept_indices = graph_utils.nms_points(
             patch_points, nms_scores, radius=nms_radius, return_indices=True
@@ -215,7 +253,7 @@ class GraphLabelGenerator:
         nmsed_indices = patch_indices[kept_indices]
         nmsed_point_num = nmsed_points.shape[0]
 
-        sample_num = self.config.TOPO_SAMPLE_NUM  # has to be greater than 1
+        sample_num = self.config.TOPO_SAMPLE_NUM  # 128 or 512
         sample_weights = self.sample_weights[nmsed_indices]
         # indices into the nmsed points in the patch
         sample_indices_in_nmsed = np.random.choice(
@@ -224,11 +262,12 @@ class GraphLabelGenerator:
             replace=True,
             p=sample_weights / np.sum(sample_weights),
         )
-        # indices into the subdivided graph
+
         sample_indices = nmsed_indices[sample_indices_in_nmsed]
 
-        radius = self.config.NEIGHBOR_RADIUS
-        max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES  # has to be greater than 1
+        # 각 점의 이웃 node 탐색
+        radius = self.config.NEIGHBOR_RADIUS  # 64
+        max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES  # 16
         nmsed_kdtree = scipy.spatial.KDTree(nmsed_points)
         sampled_points = self.subdivide_points[sample_indices, :]
         # [n_sample, n_nbr]
@@ -303,19 +342,29 @@ class GraphLabelGenerator:
 
 
 def graph_collate_fn(batch):
+    """
+    배치 내 그래프 데이터를 올바르게 패딩 및 스택하여 배치 텐서로 변환하는 collate 함수
+    그래프의 포인트 수가 샘플마다 다르므로, "graph_points" 항목은 패딩 처리하여 배치로 만든다.
+    나머지 항목들은 일반적인 스택 처리.
+    """
     keys = batch[0].keys()
     collated = {}
     for key in keys:
         if key == "graph_points":
+            # 각 배치 요소에서 "graph_points" 텐서를 모음
             tensors = [item[key] for item in batch]
+            # 최대 포인트 개수 계산 (동일 크기로 패딩 목적)
             max_point_num = max([x.shape[0] for x in tensors])
             padded = []
             for x in tensors:
                 pad_num = max_point_num - x.shape[0]
+                # 부족한 개수만큼 (0, 0)으로 패딩
                 padded_x = torch.concat([x, torch.zeros(pad_num, 2)], dim=0)
                 padded.append(padded_x)
+            # 패딩된 텐서들을 배치 차원으로 스택
             collated[key] = torch.stack(padded, dim=0)
         else:
+            # "graph_points" 이외 항목은 단순히 스택
             collated[key] = torch.stack([item[key] for item in batch], dim=0)
     return collated
 
@@ -325,7 +374,7 @@ class SatMapDataset(Dataset):
         self,
         config,
         is_train,
-        data_root="/home/lkl4502/data/Aerial/RoadGraph",
+        data_root="/data2/Aerial/RoadGraph",
         dev_run=False,
     ):
         self.config = config
@@ -389,7 +438,7 @@ class SatMapDataset(Dataset):
 
             train, val, test = spacenet_data_partition()
 
-            # coord-transform ??? -> (x, y)
+            # coord-transform, (r, c) -> (x, y) 및 y축 반전
             # takes [N, 2] points
             coord_transform = lambda v: np.stack([v[:, 1], 400 - v[:, 0]], axis=1)
 
@@ -402,7 +451,8 @@ class SatMapDataset(Dataset):
         self.tile_indices = tile_indices
 
         self.trainnum = train
-        # Stores all imgs in memory.
+
+        # rgb 이미지 리스트, 키포인트 마스크 리스트, 도로 마스크 리스트
         self.rgbs, self.keypoint_masks, self.road_masks = [], [], []
         # For graph label generation.
         self.graph_label_generators = []
@@ -410,15 +460,14 @@ class SatMapDataset(Dataset):
         ##### FAST DEBUG
         if dev_run:
             tile_indices = tile_indices[:4]
-        ##### FAST DEBUG
+
         for tile_idx in tile_indices:
             print(f"loading tile {tile_idx}")
             rgb_path = rgb_pattern.format(tile_idx)
             road_mask_path = road_mask_pattern.format(tile_idx)
             keypoint_mask_path = keypoint_mask_pattern.format(tile_idx)
+
             # graph label gen
-            # gt graph: dict for adj list, for cityscale set keys are (r, c) nodes, values are list of (r, c) nodes
-            # I don't know what coord system spacenet uses but we convert them all to (x, y)
             gt_graph_adj = pickle.load(open(gt_graph_pattern.format(tile_idx), "rb"))
             if len(gt_graph_adj) == 0:
                 print(f"===== skipped empty tile {tile_idx} =====")
@@ -436,9 +485,9 @@ class SatMapDataset(Dataset):
         self.sample_min = self.SAMPLE_MARGIN
         self.sample_max = self.IMAGE_SIZE - (
             self.config.PATCH_SIZE + self.SAMPLE_MARGIN
-        )
+        )  # 이미지 경계에서 margin 떨어진 곳까지만 샘플링
 
-        if not self.is_train:
+        if not self.is_train:  # 평가시에는 랜덤 샘플링이 아니라 순서대로 수행
             eval_patches_per_edge = math.ceil(
                 (self.IMAGE_SIZE - 2 * self.SAMPLE_MARGIN) / self.config.PATCH_SIZE
             )
@@ -468,7 +517,6 @@ class SatMapDataset(Dataset):
             return len(self.eval_patches)
 
     def __getitem__(self, idx):
-
         if self.is_train:
             img_idx = np.random.randint(low=0, high=len(self.rgbs))
             begin_x = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
@@ -478,13 +526,12 @@ class SatMapDataset(Dataset):
                 begin_y + self.config.PATCH_SIZE,
             )
         else:
-            # Returns eval patch
             img_idx, (begin_x, begin_y), (end_x, end_y) = self.eval_patches[idx]
-        # Crop patch imgs and masks
+
         rgb_patch = self.rgbs[img_idx][begin_y:end_y, begin_x:end_x, :]
         keypoint_mask_patch = self.keypoint_masks[img_idx][begin_y:end_y, begin_x:end_x]
         road_mask_patch = self.road_masks[img_idx][begin_y:end_y, begin_x:end_x]
-        # Augmentation
+
         rot_index = 0
         if self.is_train:
             rot_index = np.random.randint(0, 4)
