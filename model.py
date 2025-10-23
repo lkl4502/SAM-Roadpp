@@ -48,6 +48,7 @@ def find_highest_mask_point(x, y, mask, device="cuda"):
     x = int(x)
     y = int(y)
 
+    # NOTE 왜 2인거지?? 논문에서는 8이라고 했는데
     radius = torch.tensor(2)  # 반경 2 픽셀 내에서 탐색
 
     # 좌표 범위 설정 (반경 내에서만 탐색)
@@ -86,7 +87,7 @@ def find_highest_mask_point(x, y, mask, device="cuda"):
         max_pos = torch.nonzero(mask_scores == mask_max)  # 최대값 위치 추출
         if len(max_pos) > 0:
             x_final = max_pos[0][0] + x_min  # mask_region이 일부 영역 추출이므로
-            y_final = max_pos[0][1] + y_min  # x, y의 min값 더해줌
+            y_final = max_pos[0][1] + y_min  # x, y의 min값 더해줌``
         else:
             x_final, y_final = x, y
     else:
@@ -288,17 +289,16 @@ class TopoNet(nn.Module):
         # 152는 extendline에서 n=15, m=20으로 수행 -> extract_point에서 3배수
         # 15 * 2 * 3 + 20 * 3 = 150, offset_x 값 2
         self.pair_proj = nn.Linear(2 * self.hidden_dim + 152, self.hidden_dim)
-        # Create Transformer Encoder Layer
+
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.hidden_dim,
             nhead=self.heads,
             dim_feedforward=self.hidden_dim,
             dropout=0.1,
             activation="relu",
-            batch_first=True,  # Input format is [batch size, sequence length, features]
+            batch_first=True,
         )
 
-        # Stack the Transformer Encoder Layers
         if self.config.TOPONET_VERSION != "no_transformer":
             self.transformer_encoder = nn.TransformerEncoder(
                 encoder_layer, num_layers=self.num_attn_layers
@@ -326,7 +326,6 @@ class TopoNet(nn.Module):
         point_features = F.relu(self.feature_proj(point_features))
         point_features_o = F.relu(self.feature_proj(point_features_o))
 
-        # gathers pairs
         batch_size, n_samples, n_pairs, _ = pairs.shape
         pairs = pairs.view(batch_size, -1, 2)  # [B, N_samples * N_pairs, 2]
         batch_indices = (
@@ -676,7 +675,7 @@ class SAMRoadplus(pl.LightningModule):
         x = rgb.permute(0, 3, 1, 2)  # [B, C, H, W]
         x = (x - self.pixel_mean) / self.pixel_std
 
-        # [B, 256, image_size / vit_patch_size, image_size / vit_patch_size]
+        # [B, |256, image_size / vit_patch_size, image_size / vit_patch_size]
         image_embeddings = self.image_encoder(x)
 
         # mask_logits, mask_scores: [B, 2, H, W]

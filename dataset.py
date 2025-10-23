@@ -221,8 +221,11 @@ class GraphLabelGenerator:
     def sample_patch(self, patch, rot_index=0):
         (x0, y0), (x1, y1) = patch
         query_box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+        # 전역 index에서 패치내에 존재하는 index들
         patch_indices_all = set(self.graph_rtee.intersection(query_box))
         patch_indices = patch_indices_all - self.exclude_indices
+
         # Use NMS to downsample, params shall resemble inference time
         patch_indices = np.array(list(patch_indices))
         if len(patch_indices) == 0:
@@ -237,30 +240,37 @@ class GraphLabelGenerator:
                 [False] * max_nbr_queries,
             )
             return fake_points, [fake_sample] * sample_num
+
         patch_points = self.subdivide_points[patch_indices, :]
-        # random scores to emulate different random configurations that all share a
-        # similar spacing between sampled points
-        # raise scores for intersction points so they are always kept
+
+        # GT에서 얻는 vertex의 점수를 랜덤 설정
         nms_scores = np.random.uniform(low=0.9, high=1.0, size=patch_indices.shape[0])
+
+        # 교차점에 대한 점수는 graphlabelgenerator를 초기화할때 2.0으로 이미 할당
+        # 교차점은 항상 유지
         nms_score_override = self.nms_score_override[patch_indices]
         nms_scores = np.maximum(nms_scores, nms_score_override)
         nms_radius = self.config.ROAD_NMS_RADIUS  # 16
-        # kept_indces are into the patch_points array
+
+        # 랜덤 점수 기반 nms
         nmsed_points, kept_indices = graph_utils.nms_points(
             patch_points, nms_scores, radius=nms_radius, return_indices=True
         )
+
         # now this is into the subdivide graph
         nmsed_indices = patch_indices[kept_indices]
         nmsed_point_num = nmsed_points.shape[0]
 
         sample_num = self.config.TOPO_SAMPLE_NUM  # 128 or 512
-        sample_weights = self.sample_weights[nmsed_indices]
+        sample_weights = self.sample_weights[nmsed_indices]  # 교차점은 0.9 나머지 0.1
+
         # indices into the nmsed points in the patch
         sample_indices_in_nmsed = np.random.choice(
+            # nms 후 남은 vertex의 index 리스트
             np.arange(start=0, stop=nmsed_points.shape[0], dtype=np.int32),
-            size=sample_num,
-            replace=True,
-            p=sample_weights / np.sum(sample_weights),
+            size=sample_num,  # 각 패치별 뽑을 vertex 수, 128 or 512
+            replace=True,  # 복원 추출 여부, True면 중복 허용
+            p=sample_weights / np.sum(sample_weights),  # 각 점이 뽑힐 가중치
         )
 
         sample_indices = nmsed_indices[sample_indices_in_nmsed]
@@ -270,26 +280,32 @@ class GraphLabelGenerator:
         max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES  # 16
         nmsed_kdtree = scipy.spatial.KDTree(nmsed_points)
         sampled_points = self.subdivide_points[sample_indices, :]
+
         # [n_sample, n_nbr]
         # k+1 because the nearest one is always self
         knn_d, knn_idx = nmsed_kdtree.query(
             sampled_points, k=max_nbr_queries + 1, distance_upper_bound=radius
-        )
+        )  # k안에 속하지만, 설정 거리보다 멀면 inf
 
         samples = []
         for i in range(sample_num):
             source_node = sample_indices[i]
+
+            # inf 처리를 위해 knn_idx[i, :] < nmsed_point_num
             valid_nbr_indices = knn_idx[i, knn_idx[i, :] < nmsed_point_num]
-            valid_nbr_indices = valid_nbr_indices[
-                1:
-            ]  # the nearest one is self so remove
+
+            # 자기 자신 제외
+            valid_nbr_indices = valid_nbr_indices[1:]
+
+            # 인덱스가 nmsed_kdtree 기준이므로 nmsed_indices
             target_nodes = [nmsed_indices[ni] for ni in valid_nbr_indices]
+
             ### BFS to find immediate neighbors on graph
             reached_nodes = graph_utils.bfs_with_conditions(
                 self.full_graph_subdivide,
                 source_node,
                 set(target_nodes),
-                radius // self.subdivide_resolution,
+                radius // self.subdivide_resolution,  # NOTE 64 // 4 == 16인데.. 왜지?
             )
             shall_connect = [t in reached_nodes for t in target_nodes]
             ###
@@ -407,7 +423,7 @@ class SatMapDataset(Dataset):
             self.SAMPLE_MARGIN = 64
             rgb_pattern = osp.join(data_root, "globalscale/data/region_{}_sat.png")
             keypoint_mask_pattern = osp.join(
-                data_root, "globalscale/processed/keypoint_mask_{}.png"
+                data_root, "globalscale/processed/keypoint_mask_{}\.png"
             )
             road_mask_pattern = osp.join(
                 data_root, "globalscale/processed/road_mask_{}.png"
@@ -550,13 +566,19 @@ class SatMapDataset(Dataset):
         pairs, connected, valid = zip(*topo_samples)
         # rgb: [H, W, 3] 0-255
         # masks: [H, W] 0-1
+
         return {
-            "rgb": torch.tensor(rgb_patch, dtype=torch.float32),
+            "rgb": torch.tensor(rgb_patch, dtype=torch.float32),  # H, W, 3
             "keypoint_mask": torch.tensor(keypoint_mask_patch, dtype=torch.float32)
-            / 255.0,
-            "road_mask": torch.tensor(road_mask_patch, dtype=torch.float32) / 255.0,
-            "graph_points": torch.tensor(graph_points, dtype=torch.float32),
-            "pairs": torch.tensor(pairs, dtype=torch.int32),
-            "connected": torch.tensor(connected, dtype=torch.bool),
-            "valid": torch.tensor(valid, dtype=torch.bool),
+            / 255.0,  # H, W
+            "road_mask": torch.tensor(road_mask_patch, dtype=torch.float32)
+            / 255.0,  # H, W
+            "graph_points": torch.tensor(
+                graph_points, dtype=torch.float32
+            ),  # N_points, 2
+            "pairs": torch.tensor(pairs, dtype=torch.int32),  # 128, 16, 2 or 512, 16, 2
+            "connected": torch.tensor(
+                connected, dtype=torch.bool
+            ),  # 128, 16 or 512, 16
+            "valid": torch.tensor(valid, dtype=torch.bool),  # 128, 16 or 512, 16
         }

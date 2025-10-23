@@ -12,7 +12,7 @@ output_dirs=(
 )
 
 # Base directory where the output directories are located
-base_dir="save"
+base_dir="/home/lkl4502/SAM-Roadpp/save"
 
 # Loop through each output_dir in the list
 for output_dir in "${output_dirs[@]}"; do
