@@ -528,6 +528,11 @@ class SAMRoadplus(pl.LightningModule):
                 nn.ConvTranspose2d(32, 2, kernel_size=2, stride=2),
             )
 
+            # NOTE Mask Decoder를 여러개 두고, Ensemble하는 방식
+            # 최종적으로는 ㅌ
+            # NOTE 1. Decoder를 늘리기
+            # NOTE 2. Decoder간의 거리르 늘려주는 loss 추가
+
         #### TOPONet
         self.bilinear_sampler = BilinearSampler(config)
         self.topo_net = TopoNet(config, 256)
@@ -756,6 +761,7 @@ class SAMRoadplus(pl.LightningModule):
         if torch.any(torch.isnan(loss)):
             print("NaN detected in loss. Using default loss value.")
             loss = torch.tensor(0.0, device=loss.device)
+
         self.log(
             "train_mask_loss", mask_loss, on_step=True, on_epoch=False, prog_bar=True
         )

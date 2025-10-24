@@ -30,3 +30,6 @@ lightning_logs/
 # 환경 변수 파일
 .env
 .env.*
+
+# bash 파일
+train*.bash
