@@ -288,10 +288,15 @@ class SAMRoadplus(pl.LightningModule):
         if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
             l2_loss_list = []
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
-                for j in range(i + 1, self.config.DECODER_COUNT):  # normalization 적용
-                    l2_loss = torch.mean(
-                        (mask_logits_list[i] - mask_logits_list[j]) ** 2
-                    )
+                for j in range(i + 1, self.config.DECODER_COUNT):
+                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
+                        f1 = torch.tanh(mask_logits_list[i])
+                        f2 = torch.tanh(mask_logits_list[j])
+                        l2_loss = ((f1 - f2) ** 2).mean()
+                    else:
+                        l2_loss = torch.mean(
+                            (mask_logits_list[i] - mask_logits_list[j]) ** 2
+                        )
                     self.log(
                         f"train_l2_loss_{i}_{j}",
                         l2_loss,
@@ -310,7 +315,7 @@ class SAMRoadplus(pl.LightningModule):
                 prog_bar=True,
             )
 
-            total_loss += self.config.L2_LOSS_WEIGHT * total_l2_loss
+            total_loss -= self.config.L2_LOSS_WEIGHT * total_l2_loss
 
         self.log(
             "train_total_mask_loss",
@@ -405,7 +410,7 @@ class SAMRoadplus(pl.LightningModule):
                 prog_bar=True,
             )
 
-            total_loss += self.config.L2_LOSS_WEIGHT * total_l2_loss
+            total_loss -= self.config.L2_LOSS_WEIGHT * total_l2_loss
 
         self.log(
             "val_total_mask_loss",
