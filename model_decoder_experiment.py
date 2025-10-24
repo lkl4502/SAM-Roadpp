@@ -258,7 +258,7 @@ class SAMRoadplus(pl.LightningModule):
 
         mask_loss_list = []
         for i, logits in enumerate(mask_logits_list):
-            if self.config.ALEATORIC:
+            if self.config.ALEATORIC:  # 3채널은 분산정보
                 new_logits = logits[..., :2]
                 uncertainty = logits[..., 2].unsqueeze(-1)
 
@@ -285,10 +285,10 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:
+        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
             l2_loss_list = []
-            for i in range(self.config.DECODER_COUNT):
-                for j in range(i + 1, self.config.DECODER_COUNT):
+            for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
+                for j in range(i + 1, self.config.DECODER_COUNT):  # normalization 적용
                     l2_loss = torch.mean(
                         (mask_logits_list[i] - mask_logits_list[j]) ** 2
                     )
@@ -375,11 +375,11 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:
+        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
             l2_loss_list = []
-            for i in range(self.config.DECODER_COUNT):
+            for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.LOGITS_NORMALIZATION:
+                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
                         f1 = torch.tanh(mask_logits_list[i])
                         f2 = torch.tanh(mask_logits_list[j])
                         l2_loss = ((f1 - f2) ** 2).mean()
