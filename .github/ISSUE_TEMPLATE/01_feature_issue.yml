@@ -1,0 +1,23 @@
+name: ✨ Feautre Report
+description: Suggest an idea for this project
+title: "[Feature] "
+labels: ["✨ Feature"]
+body:
+  - type: textarea
+    attributes:
+      label: 🌈 Background
+      description: Motivation for this feature?
+      placeholder: Anything you want to add?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 📋 Todo
+      description: What needs to be done?
+      placeholder: "- [ ] ..."
+
+  - type: textarea
+    attributes:
+      label: 👀 See Also
+      description: Anything else you want to add?

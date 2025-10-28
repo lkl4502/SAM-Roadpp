@@ -1,0 +1,58 @@
+DATASET: "spacenet"
+
+# --------------------------------
+# Encoder / Backbone 설정
+# --------------------------------
+NO_SAM: False
+SAM_VERSION: "vit_b"
+SAM_CKPT_PATH: "sam_ckpts/sam_vit_b_01ec64.pth"
+FREEZE_ENCODER: False
+ENCODER_LORA: False
+FOCAL_LOSS: False
+USE_SAM_DECODER: False
+
+# --------------------------------
+# Data / Training 설정
+# --------------------------------
+PATCH_SIZE: 256
+BATCH_SIZE: 64
+DATA_WORKER_NUM: 1
+TRAIN_EPOCHS: 510
+BASE_LR: 0.001
+ENCODER_LR_FACTOR: 0.1
+
+# --------------------------------
+# TopoNet 설정
+# --------------------------------
+TOPO_SAMPLE_NUM: 128 # patch 별 Source Vertex 수
+TOPONET_VERSION: "normal"
+
+# --------------------------------
+# Inference
+# --------------------------------
+INFER_BATCH_SIZE: 64
+SAMPLE_MARGIN: 0
+INFER_PATCHES_PER_EDGE: 16
+
+# --------------------------------
+# Threshold 설정
+# --------------------------------
+ITSC_THRESHOLD: 0.195 # Vertex Threshold
+ROAD_THRESHOLD: 0.341 # Road내 Vertex Threshold
+TOPO_THRESHOLD: 0.705 # 예측 도로에 대한 Threshold
+
+# --------------------------------
+# NMS 관련 변수
+# NOTE new target node를 샘플링할때 사용되는 변수는 왜 추가되지 않은거지?
+# --------------------------------
+ITSC_NMS_RADIUS: 8 # vertex 간 거리
+ROAD_NMS_RADIUS: 16 # road에서 추출한 vertex 간 거리 d_v
+NEIGHBOR_RADIUS: 64 # R_nbr
+MAX_NEIGHBOR_QUERIES: 16 # N_nbr
+
+# --------------------------------
+# Wandb
+# --------------------------------
+WANDB_TEAM_NAME: "lkl4502-kookmin-university"
+WANDB_PROJECT_NAME: "Road Graph Extraction SpaceNet"
+WANDB_EXPERIMENT_NAME: "baseline"

@@ -1,0 +1,38 @@
+# 모델 파일
+*.pt
+*.pth
+
+# 캐시 / 컴파일 산출물
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.cache
+.cache/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# 로그
+*.log
+log/
+logs/
+wandb/
+
+# 출력 폴더
+output/
+outputs/
+runs/
+checkpoints/
+save/
+lightning_logs/
+
+# 환경 변수 파일
+.env
+.env.*
+
+# bash 파일
+train*.bash
+
+# txt 파일
+*.txt

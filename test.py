@@ -16,21 +16,17 @@ import os
 import matplotlib.pyplot as plt
 import torch
 
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
+# os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 parser = ArgumentParser()
 parser.add_argument(
     "--config",
-    default='',
+    default="",
     help="config file (.yml) containing the hyper-parameters for training. "
     "If None, use the nnU-Net config. See /config for examples.",
 )
-parser.add_argument(
-    "--checkpoint", default='', help="checkpoint of the model to test."
-)
-parser.add_argument(
-    "--precision", default="16-mixed", help="32 or 16"
-)
+parser.add_argument("--checkpoint", default="", help="checkpoint of the model to test.")
+parser.add_argument("--precision", default="16-mixed", help="32 or 16")
 
 
 if __name__ == "__main__":
@@ -39,7 +35,7 @@ if __name__ == "__main__":
 
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    
+
     net = SAMRoadplus(config)
 
     val_ds = SatMapDataset(config, is_train=False, dev_run=False)
@@ -54,7 +50,7 @@ if __name__ == "__main__":
     )
 
     checkpoint_callback = ModelCheckpoint(every_n_epochs=1, save_top_k=-1)
-    lr_monitor = LearningRateMonitor(logging_interval='step')
+    lr_monitor = LearningRateMonitor(logging_interval="step")
 
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,
@@ -64,5 +60,5 @@ if __name__ == "__main__":
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
         # profiler=profiler
-        )
+    )
     trainer.test(net, dataloaders=val_loader, ckpt_path=args.checkpoint)
