@@ -119,6 +119,9 @@ class SAMRoadplus(pl.LightningModule):
         self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
 
         #### Metrics
+        if self.config.COMBINE_LOSS == "KLDivLoss":
+            self.kl_div_criterion = torch.nn.KLDivLoss(reduction="batchmean")
+
         self.keypoint_iou = BinaryJaccardIndex(threshold=0.5)
         self.road_iou = BinaryJaccardIndex(threshold=0.5)
         self.topo_f1 = F1Score(task="binary", threshold=0.5, ignore_index=-1)
@@ -253,7 +256,7 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # [B, H, W, 2]
-        mask_logits_list, _ = self(rgb, graph_points, pairs, valid)
+        mask_logits_list, mask_scores_list = self(rgb, graph_points, pairs, valid)
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
         mask_loss_list = []
@@ -285,37 +288,117 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
-            l2_loss_list = []
+        if self.config.COMBINE_LOSS:
+            combine_loss_list = []
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                        f1 = torch.tanh(mask_logits_list[i])
-                        f2 = torch.tanh(mask_logits_list[j])
-                        l2_loss = ((f1 - f2) ** 2).mean()
-                    else:
-                        l2_loss = torch.mean(
-                            (mask_logits_list[i] - mask_logits_list[j]) ** 2
+                    if self.config.COMBINE_LOSS == "KLDivLoss":
+                        log_p = F.log_softmax(mask_logits_list[i], dim=-1)
+                        q = F.softmax(mask_logits_list[j], dim=-1)
+
+                        combine_loss = self.kl_div_criterion(log_p, q)
+                        log_name = f"train_kl_div_loss_{i}_{j}"
+
+                    elif self.config.COMBINE_LOSS == "L2 Loss":
+                        if self.config.LOGITS_NORMALIZATION:  # normalization 적용
+                            f1_mean = mask_logits_list[i].mean(dim=(1, 2), keepdim=True)
+                            f1_std = mask_logits_list[i].std(dim=(1, 2), keepdim=True)
+                            f1 = (mask_logits_list[i] - f1_mean) / (f1_std + 1e-8)
+
+                            f2_mean = mask_logits_list[j].mean(dim=(1, 2), keepdim=True)
+                            f2_std = mask_logits_list[j].std(dim=(1, 2), keepdim=True)
+                            f2 = (mask_logits_list[j] - f2_mean) / (f2_std + 1e-8)
+                            combine_loss = ((f1 - f2) ** 2).mean()
+                        else:
+                            f1, f2 = mask_scores_list[i], mask_scores_list[j]
+
+                            road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                            keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+
+                            # NOTE 현재는 동일 가중치, 이후에 조정하는 실험 시도 가능성
+                            combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
+
+                            self.log(
+                                f"train_road_l2_loss_{i}_{j}",
+                                road_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=False,
+                            )
+
+                            self.log(
+                                f"train_keypoint_l2_loss_{i}_{j}",
+                                keypoint_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=False,
+                            )
+
+                        log_name = f"train_l2_loss_{i}_{j}"
+
+                    elif self.config.COMBINE_LOSS == "Cosine Similarity":
+                        f1, f2 = mask_logits_list[i], mask_logits_list[j]
+                        f1_road = F.normalize(f1[..., 0].flatten(1), dim=1)
+                        f2_road = F.normalize(f2[..., 0].flatten(1), dim=1)
+
+                        f1_keypoint = F.normalize(f1[..., 1].flatten(1), dim=1)
+                        f2_keypoint = F.normalize(f2[..., 1].flatten(1), dim=1)
+
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
+                        keypoint_cos_similarity = (
+                            (f1_keypoint * f2_keypoint).sum(dim=1).mean()
                         )
+
+                        combine_loss = (
+                            road_cos_similarity + keypoint_cos_similarity
+                        ) / 2
+                        log_name = f"train_cos_similarity_{i}_{j}"
+
+                        self.log(
+                            f"train_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
+                            on_step=True,
+                            on_epoch=False,
+                            prog_bar=False,
+                        )
+
+                        self.log(
+                            f"train_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
+                            on_step=True,
+                            on_epoch=False,
+                            prog_bar=False,
+                        )
+
                     self.log(
-                        f"train_l2_loss_{i}_{j}",
-                        l2_loss,
+                        log_name,
+                        combine_loss,
                         on_step=True,
                         on_epoch=False,
                         prog_bar=True,
                     )
-                    l2_loss_list.append(l2_loss)
+                    combine_loss_list.append(combine_loss)
 
-            total_l2_loss = torch.stack(l2_loss_list).mean()
+            total_combine_loss = torch.stack(combine_loss_list).mean()
+            if self.config.COMBINE_LOSS == "KLDivLoss":
+                train_total_loss_name = "train_total_kl_div_loss"
+            elif self.config.COMBINE_LOSS == "L2 Loss":
+                train_total_loss_name = "train_total_l2_loss"
+            elif self.config.COMBINE_LOSS == "Cosine Similarity":
+                train_total_loss_name = "train_total_cos_similarity"
+
             self.log(
-                "train_total_l2_loss",
-                total_l2_loss,
+                train_total_loss_name,
+                total_combine_loss,
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
             )
 
-            total_loss -= self.config.L2_LOSS_WEIGHT * total_l2_loss
+            if self.config.OPERATOR == "Sub":
+                total_loss -= self.config.LOSS_WEIGHT * total_combine_loss
+            else:
+                total_loss += self.config.LOSS_WEIGHT * total_combine_loss
 
         self.log(
             "train_total_mask_loss",
@@ -380,37 +463,109 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
-            l2_loss_list = []
+        if self.config.COMBINE_LOSS:
+            combine_loss_list = []
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                        f1 = torch.tanh(mask_logits_list[i])
-                        f2 = torch.tanh(mask_logits_list[j])
-                        l2_loss = ((f1 - f2) ** 2).mean()
-                    else:
-                        l2_loss = torch.mean(
-                            (mask_logits_list[i] - mask_logits_list[j]) ** 2
+                    if self.config.COMBINE_LOSS == "KLDivLoss":
+                        combine_loss = self.kl_div_criterion(
+                            mask_scores_list[i].log(), mask_scores_list[j]
                         )
+                        log_name = f"val_kl_div_loss_{i}_{j}"
+
+                    elif self.config.COMBINE_LOSS == "L2 Loss":
+                        if self.config.LOGITS_NORMALIZATION:  # normalization 적용
+                            f1 = torch.tanh(mask_logits_list[i])
+                            f2 = torch.tanh(mask_logits_list[j])
+                            combine_loss = ((f1 - f2) ** 2).mean()
+                        else:
+                            f1, f2 = mask_scores_list[i], mask_scores_list[j]
+
+                            road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                            keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+                            combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
+
+                            self.log(
+                                f"val_road_l2_loss_{i}_{j}",
+                                road_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=True,
+                            )
+
+                            self.log(
+                                f"val_keypoint_l2_loss_{i}_{j}",
+                                keypoint_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=True,
+                            )
+
+                        log_name = f"val_l2_loss_{i}_{j}"
+
+                    elif self.config.COMBINE_LOSS == "Cosine Similarity":
+                        f1, f2 = mask_logits_list[i], mask_logits_list[j]
+                        f1_road = F.normalize(f1[..., 0].flatten(1), dim=1)
+                        f2_road = F.normalize(f2[..., 0].flatten(1), dim=1)
+
+                        f1_keypoint = F.normalize(f1[..., 1].flatten(1), dim=1)
+                        f2_keypoint = F.normalize(f2[..., 1].flatten(1), dim=1)
+
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
+                        keypoint_cos_similarity = (
+                            (f1_keypoint * f2_keypoint).sum(dim=1).mean()
+                        )
+
+                        combine_loss = (
+                            road_cos_similarity + keypoint_cos_similarity
+                        ) / 2
+                        log_name = f"val_cos_similarity_{i}_{j}"
+
+                        self.log(
+                            f"val_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
+                            on_step=True,
+                            on_epoch=False,
+                            prog_bar=True,
+                        )
+
+                        self.log(
+                            f"val_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
+                            on_step=True,
+                            on_epoch=False,
+                            prog_bar=True,
+                        )
+
                     self.log(
-                        f"val_l2_loss_{i}_{j}",
-                        l2_loss,
+                        log_name,
+                        combine_loss,
                         on_step=True,
                         on_epoch=False,
                         prog_bar=True,
                     )
-                    l2_loss_list.append(l2_loss)
+                    combine_loss_list.append(combine_loss)
 
-            total_l2_loss = torch.stack(l2_loss_list).mean()
+            total_combine_loss = torch.stack(combine_loss_list).mean()
+            if self.config.COMBINE_LOSS == "KLDivLoss":
+                val_total_loss_name = "val_total_kl_div_loss"
+            elif self.config.COMBINE_LOSS == "L2 Loss":
+                val_total_loss_name = "val_total_l2_loss"
+            elif self.config.COMBINE_LOSS == "Cosine Similarity":
+                val_total_loss_name = "val_total_cos_similarity"
+
             self.log(
-                "val_total_l2_loss",
-                total_l2_loss,
+                val_total_loss_name,
+                total_combine_loss,
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
             )
 
-            total_loss -= self.config.L2_LOSS_WEIGHT * total_l2_loss
+            if self.config.OPERATOR == "Sub":
+                total_loss -= self.config.LOSS_WEIGHT * total_combine_loss
+            else:
+                total_loss += self.config.LOSS_WEIGHT * total_combine_loss
 
         self.log(
             "val_total_mask_loss",

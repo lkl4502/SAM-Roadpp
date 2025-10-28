@@ -33,3 +33,6 @@ lightning_logs/
 
 # bash 파일
 train*.bash
+
+# txt 파일
+*.txt

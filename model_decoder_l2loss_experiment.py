@@ -118,6 +118,9 @@ class SAMRoadplus(pl.LightningModule):
         reduction = "mean" if not self.config.ALEATORIC else "none"
         self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
 
+        # KL Divergence Loss 추가
+        self.kl_div_criterion = torch.nn.KLDivLoss(reduction="batchmean")
+
         #### Metrics
         self.keypoint_iou = BinaryJaccardIndex(threshold=0.5)
         self.road_iou = BinaryJaccardIndex(threshold=0.5)
@@ -227,17 +230,15 @@ class SAMRoadplus(pl.LightningModule):
             )
             mask_scores = torch.sigmoid(mask_logits)
         else:
-            mask_logits_list = [
-                decoder(image_embeddings) for decoder in self.decoder_list
-            ]
-            mask_scores_list = [torch.sigmoid(logits) for logits in mask_logits_list]
+            mask_logits = [decoder(image_embeddings) for decoder in self.decoder_list]
+            mask_scores = [torch.sigmoid(logits) for logits in mask_logits]
 
         # image embedding + mask를 통해 graph points 주변 feature 샘플링
         # target_feature, target_point, source_feature
         # [B, 2, H, W]
 
-        mask_logits_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_logits_list))
-        mask_scores_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_scores_list))
+        mask_logits_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_logits))
+        mask_scores_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_scores))
         return mask_logits_list, mask_scores_list
 
     def training_step(self, batch, batch_idx):
@@ -253,7 +254,7 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # [B, H, W, 2]
-        mask_logits_list, _ = self(rgb, graph_points, pairs, valid)
+        mask_logits_list, mask_scores_list = self(rgb, graph_points, pairs, valid)
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
         mask_loss_list = []
@@ -285,18 +286,33 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
+        if self.config.COMBINE_LOSS:  # True면 우선 KL Divergence loss사용
             l2_loss_list = []
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                        f1 = torch.tanh(mask_logits_list[i])
-                        f2 = torch.tanh(mask_logits_list[j])
-                        l2_loss = ((f1 - f2) ** 2).mean()
-                    else:
-                        l2_loss = torch.mean(
-                            (mask_logits_list[i] - mask_logits_list[j]) ** 2
-                        )
+                    f1, f2 = mask_scores_list[i], mask_scores_list[j]
+
+                    road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                    keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+
+                    l2_loss = (road_l2_loss + keypoint_l2_loss) / 2
+
+                    self.log(
+                        f"train_road_l2_loss_{i}_{j}",
+                        road_l2_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        prog_bar=True,
+                    )
+
+                    self.log(
+                        f"train_keypoint_l2_loss_{i}_{j}",
+                        keypoint_l2_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        prog_bar=True,
+                    )
+
                     self.log(
                         f"train_l2_loss_{i}_{j}",
                         l2_loss,
@@ -380,18 +396,33 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
 
-        if self.config.COMBINE_LOSS:  # True면 우선 l2 loss사용
+        if self.config.COMBINE_LOSS:  # True면 우선 KL Divergence loss사용
             l2_loss_list = []
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                        f1 = torch.tanh(mask_logits_list[i])
-                        f2 = torch.tanh(mask_logits_list[j])
-                        l2_loss = ((f1 - f2) ** 2).mean()
-                    else:
-                        l2_loss = torch.mean(
-                            (mask_logits_list[i] - mask_logits_list[j]) ** 2
-                        )
+                    f1, f2 = mask_scores_list[i], mask_scores_list[j]
+
+                    road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                    keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+
+                    l2_loss = (road_l2_loss + keypoint_l2_loss) / 2
+
+                    self.log(
+                        f"val_road_l2_loss_{i}_{j}",
+                        road_l2_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        prog_bar=True,
+                    )
+
+                    self.log(
+                        f"val_keypoint_l2_loss_{i}_{j}",
+                        keypoint_l2_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        prog_bar=True,
+                    )
+
                     self.log(
                         f"val_l2_loss_{i}_{j}",
                         l2_loss,

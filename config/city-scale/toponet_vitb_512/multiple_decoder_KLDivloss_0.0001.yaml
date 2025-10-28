@@ -46,11 +46,10 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "per channel L2 Loss 1e-2"
+WANDB_EXPERIMENT_NAME: "multiple decoder - KL Divergence Loss 1e-4"
 
 # 추가
 DECODER_COUNT: 3
 ALEATORIC: False
 COMBINE_LOSS: True
-L2_LOSS_WEIGHT: 0.01
-LOGITS_NORMALIZATION: False
+KL_DIV_LOSS_WEIGHT: 0.0001
