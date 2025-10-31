@@ -272,18 +272,23 @@ class SAMRoadplus(pl.LightningModule):
                 # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
                 sigma = torch.sqrt(torch.exp(uncertainty))  # B, H, W, C
 
+                # 정규 분포에서 샘플링
+                # [T, B, H, W, C]
+                epsilon = torch.randn(
+                    self.config.MC_SAMPLING, *sigma.shape, device=sigma.device
+                )
+
                 # MC Sampling을 위한 브로드캐스팅 준비
                 new_logits = new_logits.unsqueeze(0)  # 1, B, H, W, C
                 sigma = sigma.unsqueeze(0)  # 1, B, H, W, C
 
-                # 정규 분포에서 샘플링
-                # [T, B, H, W, C]
-                epsilon = torch.randn(self.config.MC_SAMPLING, *sigma.shape)
                 x_hat = new_logits + sigma * epsilon  # T, B, H, W, C
 
                 # T, B, H, W, C
                 # loss에서 브로드캐스팅 되나..?
-                gt_repeat = gt_masks.repeat(self.config.MC_SAMPLING, *gt_masks.shape)
+                gt_repeat = gt_masks[None, ...].repeat(
+                    *([self.config.MC_SAMPLING] + [1 for _ in range(gt_masks.ndim)])
+                )
 
                 loss_mc = self.mask_criterion(x_hat, gt_repeat)
                 mask_loss = loss_mc.mean(dim=0).mean()
@@ -352,18 +357,23 @@ class SAMRoadplus(pl.LightningModule):
                 # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
                 sigma = torch.sqrt(torch.exp(uncertainty))  # B, H, W, C
 
+                # 정규 분포에서 샘플링
+                # [T, B, H, W, C]
+                epsilon = torch.randn(
+                    self.config.MC_SAMPLING, *sigma.shape, device=sigma.device
+                )
+
                 # MC Sampling을 위한 브로드캐스팅 준비
                 new_logits = new_logits.unsqueeze(0)  # 1, B, H, W, C
                 sigma = sigma.unsqueeze(0)  # 1, B, H, W, C
 
-                # 정규 분포에서 샘플링
-                # [T, B, H, W, C]
-                epsilon = torch.randn(self.config.MC_SAMPLING, *sigma.shape)
                 x_hat = new_logits + sigma * epsilon  # T, B, H, W, C
 
                 # T, B, H, W, C
                 # loss에서 브로드캐스팅 되나..?
-                gt_repeat = gt_masks.repeat(self.config.MC_SAMPLING, *gt_masks.shape)
+                gt_repeat = gt_masks[None, ...].repeat(
+                    *([self.config.MC_SAMPLING] + [1 for _ in range(gt_masks.ndim)])
+                )
 
                 loss_mc = self.mask_criterion(x_hat, gt_repeat)
                 mask_loss = loss_mc.mean(dim=0).mean()
@@ -371,15 +381,15 @@ class SAMRoadplus(pl.LightningModule):
                 self.log(
                     "val_mean_variance",
                     torch.exp(uncertainty).mean(),
-                    on_step=True,
-                    on_epoch=False,
+                    on_step=False,
+                    on_epoch=True,
                     prog_bar=True,
                 )
                 self.log(
                     "val_mean_std",
                     torch.mean(sigma),
-                    on_step=True,
-                    on_epoch=False,
+                    on_step=False,
+                    on_epoch=True,
                     prog_bar=True,
                 )
             else:
@@ -397,8 +407,8 @@ class SAMRoadplus(pl.LightningModule):
         self.log(
             "val_total_loss",
             total_loss,
-            on_step=True,
-            on_epoch=False,
+            on_step=False,
+            on_epoch=True,
             prog_bar=True,
         )
 
@@ -442,9 +452,15 @@ class SAMRoadplus(pl.LightningModule):
 
             if self.config.ALEATORIC:
                 columns += ["variance_map"]
-                zip_list += [
-                    mask_score[:max_viz_num, :, :, 2] for mask_score in mask_scores_list
-                ]
+                viz_var_list = []
+                for mask_logits in mask_logits_list:
+                    var_map = mask_logits[:max_viz_num, :, :, 2]
+                    var_map = torch.exp(var_map)
+                    var_map = (var_map - var_map.min()) / (
+                        var_map.max() - var_map.min() + 1e-8
+                    )
+                    viz_var_list.append(var_map)
+                zip_list += viz_var_list
 
             data = [
                 [wandb.Image(x.cpu().numpy()) for x in row]

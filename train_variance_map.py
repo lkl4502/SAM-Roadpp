@@ -79,7 +79,7 @@ if __name__ == "__main__":
     )
 
     checkpoint_callback = ModelCheckpoint(
-        every_n_epochs=1, save_top_k=3, monitor="val_loss", mode="min"
+        every_n_epochs=1, save_top_k=3, monitor="val_total_loss", mode="min"
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger()

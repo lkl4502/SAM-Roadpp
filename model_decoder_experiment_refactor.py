@@ -453,8 +453,8 @@ class SAMRoadplus(pl.LightningModule):
             self.log(
                 f"val_mask_loss_{i}",
                 mask_loss,
-                on_step=True,
-                on_epoch=False,
+                on_step=False,
+                on_epoch=True,
                 prog_bar=True,
             )
 
@@ -488,16 +488,16 @@ class SAMRoadplus(pl.LightningModule):
                             self.log(
                                 f"val_road_l2_loss_{i}_{j}",
                                 road_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
+                                on_step=False,
+                                on_epoch=True,
                                 prog_bar=True,
                             )
 
                             self.log(
                                 f"val_keypoint_l2_loss_{i}_{j}",
                                 keypoint_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
+                                on_step=False,
+                                on_epoch=True,
                                 prog_bar=True,
                             )
 
@@ -524,24 +524,24 @@ class SAMRoadplus(pl.LightningModule):
                         self.log(
                             f"val_road_cos_similarity_{i}_{j}",
                             road_cos_similarity,
-                            on_step=True,
-                            on_epoch=False,
+                            on_step=False,
+                            on_epoch=True,
                             prog_bar=True,
                         )
 
                         self.log(
                             f"val_keypoint_cos_similarity_{i}_{j}",
                             keypoint_cos_similarity,
-                            on_step=True,
-                            on_epoch=False,
+                            on_step=False,
+                            on_epoch=True,
                             prog_bar=True,
                         )
 
                     self.log(
                         log_name,
                         combine_loss,
-                        on_step=True,
-                        on_epoch=False,
+                        on_step=False,
+                        on_epoch=True,
                         prog_bar=True,
                     )
                     combine_loss_list.append(combine_loss)
@@ -557,8 +557,8 @@ class SAMRoadplus(pl.LightningModule):
             self.log(
                 val_total_loss_name,
                 total_combine_loss,
-                on_step=True,
-                on_epoch=False,
+                on_step=False,
+                on_epoch=True,
                 prog_bar=True,
             )
 
@@ -570,16 +570,16 @@ class SAMRoadplus(pl.LightningModule):
         self.log(
             "val_total_mask_loss",
             total_mask_loss,
-            on_step=True,
-            on_epoch=False,
+            on_step=False,
+            on_epoch=True,
             prog_bar=True,
         )
 
         self.log(
             "val_total_loss",
             total_loss,
-            on_step=True,
-            on_epoch=False,
+            on_step=False,
+            on_epoch=True,
             prog_bar=True,
         )
 
