@@ -45,14 +45,9 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "baseline"
+WANDB_EXPERIMENT_NAME: "Using Variance Map - Independent 100"
 
 # 추가
-DECODER_COUNT: 3
-ALEATORIC: False
-COMBINE_LOSS: "Aleatoric"
-
-LOSS_WEIGHT: 0.1
-LOGITS_NORMALIZATION: False
-
-OPERATOR: "Sub"
+DECODER_COUNT: 1
+ALEATORIC: True
+MC_SAMPLING: 100
