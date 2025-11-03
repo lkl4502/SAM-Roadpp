@@ -288,12 +288,21 @@ class SAMRoadplus(pl.LightningModule):
         total_mask_loss = torch.stack(mask_loss_list)
 
         if self.config.LTA:  # loser takes all
-            selected_loss = total_mask_loss.min()
+            selected_decoder_index = total_mask_loss.argmax()
+            selected_loss = total_mask_loss[selected_decoder_index]
         elif self.config.WTA:  # winner takes all
-            selected_loss = total_mask_loss.max()
+            selected_decoder_index = total_mask_loss.argmin()
+            selected_loss = total_mask_loss[selected_decoder_index]
         else:
             selected_loss = total_mask_loss.mean()
 
+        self.log(
+            "update decoder",
+            selected_decoder_index,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
         total_loss = selected_loss
 
         if self.config.COMBINE_LOSS:
