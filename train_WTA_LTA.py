@@ -4,7 +4,7 @@ import wandb
 import lightning.pytorch as pl
 
 from utils import load_config
-from model_decoder_experiment_refactor import SAMRoadplus
+from model_WTA_LTA import SAMRoadplus
 from dotenv import load_dotenv
 from argparse import ArgumentParser
 from dataset import SatMapDataset, graph_collate_fn
