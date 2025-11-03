@@ -468,15 +468,21 @@ class SAMRoadplus(pl.LightningModule):
             for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
                 for j in range(i + 1, self.config.DECODER_COUNT):
                     if self.config.COMBINE_LOSS == "KLDivLoss":
-                        combine_loss = self.kl_div_criterion(
-                            mask_scores_list[i].log(), mask_scores_list[j]
-                        )
+                        log_p = F.log_softmax(mask_logits_list[i], dim=-1)
+                        q = F.softmax(mask_logits_list[j], dim=-1)
+
+                        combine_loss = self.kl_div_criterion(log_p, q)
                         log_name = f"val_kl_div_loss_{i}_{j}"
 
                     elif self.config.COMBINE_LOSS == "L2 Loss":
                         if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                            f1 = torch.tanh(mask_logits_list[i])
-                            f2 = torch.tanh(mask_logits_list[j])
+                            f1_mean = mask_logits_list[i].mean(dim=(1, 2), keepdim=True)
+                            f1_std = mask_logits_list[i].std(dim=(1, 2), keepdim=True)
+                            f1 = (mask_logits_list[i] - f1_mean) / (f1_std + 1e-8)
+
+                            f2_mean = mask_logits_list[j].mean(dim=(1, 2), keepdim=True)
+                            f2_std = mask_logits_list[j].std(dim=(1, 2), keepdim=True)
+                            f2 = (mask_logits_list[j] - f2_mean) / (f2_std + 1e-8)
                             combine_loss = ((f1 - f2) ** 2).mean()
                         else:
                             f1, f2 = mask_scores_list[i], mask_scores_list[j]
