@@ -52,7 +52,6 @@ class _LoRA_qkv(nn.Module):
         self.w_identity = torch.eye(qkv.in_features)
 
     def forward(self, x):
-        # qkv = self.qkv(x)  # B,N,N,3*org_C
         # weight와 bias는 buffer로 등록되어 gradient 계산에서 제외됨
         qkv = F.linear(x, self.weight, self.bias)
         new_q = self.linear_b_q(self.linear_a_q(x))
@@ -383,8 +382,8 @@ class SAMRoadplus(pl.LightningModule):
                 # logit 구분
                 # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
                 # B, H, W
-                road_logits = logits[..., 0]
-                keypoint_logits = logits[..., 1]
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
                 # B, H, W
                 road_vars = mask_road_vars_list[i].squeeze(-1)
@@ -515,8 +514,8 @@ class SAMRoadplus(pl.LightningModule):
                 # logit 구분
                 # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
                 # B, H, W
-                road_logits = logits[..., 0]
-                keypoint_logits = logits[..., 1]
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
                 # B, H, W
                 road_vars = mask_road_vars_list[i].squeeze(-1)

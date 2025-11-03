@@ -111,10 +111,10 @@ class SAMRoadplus(pl.LightningModule):
             self.decoder_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=2) for _ in range(self.config.DECODER_COUNT)]
             )
-            self.decoder_road_var_list = nn.ModuleList(
+            self.decoder_keypoint_var_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
             )
-            self.decoder_keypoint_var_list = nn.ModuleList(
+            self.decoder_road_var_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
             )
 
@@ -288,8 +288,8 @@ class SAMRoadplus(pl.LightningModule):
                 # logit 구분
                 # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
                 # B, H, W
-                road_logits = logits[..., 0]
-                keypoint_logits = logits[..., 1]
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
                 # B, H, W
                 road_vars = mask_road_vars_list[i].squeeze(-1)
@@ -420,8 +420,8 @@ class SAMRoadplus(pl.LightningModule):
                 # logit 구분
                 # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
                 # B, H, W
-                road_logits = logits[..., 0]
-                keypoint_logits = logits[..., 1]
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
                 # B, H, W
                 road_vars = mask_road_vars_list[i].squeeze(-1)

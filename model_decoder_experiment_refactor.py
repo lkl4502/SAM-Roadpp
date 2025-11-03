@@ -312,19 +312,11 @@ class SAMRoadplus(pl.LightningModule):
                         else:
                             f1, f2 = mask_scores_list[i], mask_scores_list[j]
 
-                            road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
-                            keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                            road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
 
                             # NOTE 현재는 동일 가중치, 이후에 조정하는 실험 시도 가능성
                             combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
-
-                            self.log(
-                                f"train_road_l2_loss_{i}_{j}",
-                                road_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
-                                prog_bar=False,
-                            )
 
                             self.log(
                                 f"train_keypoint_l2_loss_{i}_{j}",
@@ -334,37 +326,45 @@ class SAMRoadplus(pl.LightningModule):
                                 prog_bar=False,
                             )
 
+                            self.log(
+                                f"train_road_l2_loss_{i}_{j}",
+                                road_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=False,
+                            )
+
                         log_name = f"train_l2_loss_{i}_{j}"
 
                     elif self.config.COMBINE_LOSS == "Cosine Similarity":
                         f1, f2 = mask_logits_list[i], mask_logits_list[j]
-                        f1_road = F.normalize(f1[..., 0].flatten(1), dim=1)
-                        f2_road = F.normalize(f2[..., 0].flatten(1), dim=1)
+                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
+                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
 
-                        f1_keypoint = F.normalize(f1[..., 1].flatten(1), dim=1)
-                        f2_keypoint = F.normalize(f2[..., 1].flatten(1), dim=1)
+                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
+                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
 
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
                         keypoint_cos_similarity = (
                             (f1_keypoint * f2_keypoint).sum(dim=1).mean()
                         )
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
 
                         combine_loss = (
-                            road_cos_similarity + keypoint_cos_similarity
+                            keypoint_cos_similarity + road_cos_similarity
                         ) / 2
                         log_name = f"train_cos_similarity_{i}_{j}"
 
                         self.log(
-                            f"train_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
+                            f"train_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
                             on_step=True,
                             on_epoch=False,
                             prog_bar=False,
                         )
 
                         self.log(
-                            f"train_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
+                            f"train_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
                             on_step=True,
                             on_epoch=False,
                             prog_bar=False,
@@ -481,17 +481,9 @@ class SAMRoadplus(pl.LightningModule):
                         else:
                             f1, f2 = mask_scores_list[i], mask_scores_list[j]
 
-                            road_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
-                            keypoint_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
-                            combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
-
-                            self.log(
-                                f"val_road_l2_loss_{i}_{j}",
-                                road_l2_loss,
-                                on_step=False,
-                                on_epoch=True,
-                                prog_bar=True,
-                            )
+                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                            road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+                            combine_loss = (keypoint_l2_loss + road_l2_loss) / 2
 
                             self.log(
                                 f"val_keypoint_l2_loss_{i}_{j}",
@@ -501,37 +493,46 @@ class SAMRoadplus(pl.LightningModule):
                                 prog_bar=True,
                             )
 
+                            self.log(
+                                f"val_road_l2_loss_{i}_{j}",
+                                road_l2_loss,
+                                on_step=False,
+                                on_epoch=True,
+                                prog_bar=True,
+                            )
+
                         log_name = f"val_l2_loss_{i}_{j}"
 
                     elif self.config.COMBINE_LOSS == "Cosine Similarity":
                         f1, f2 = mask_logits_list[i], mask_logits_list[j]
-                        f1_road = F.normalize(f1[..., 0].flatten(1), dim=1)
-                        f2_road = F.normalize(f2[..., 0].flatten(1), dim=1)
 
-                        f1_keypoint = F.normalize(f1[..., 1].flatten(1), dim=1)
-                        f2_keypoint = F.normalize(f2[..., 1].flatten(1), dim=1)
+                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
+                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
 
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
+                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
+                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
+
                         keypoint_cos_similarity = (
                             (f1_keypoint * f2_keypoint).sum(dim=1).mean()
                         )
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
 
                         combine_loss = (
-                            road_cos_similarity + keypoint_cos_similarity
+                            keypoint_cos_similarity + road_cos_similarity
                         ) / 2
                         log_name = f"val_cos_similarity_{i}_{j}"
 
                         self.log(
-                            f"val_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
+                            f"val_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
                             on_step=False,
                             on_epoch=True,
                             prog_bar=True,
                         )
 
                         self.log(
-                            f"val_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
+                            f"val_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
                             on_step=False,
                             on_epoch=True,
                             prog_bar=True,
