@@ -1,4 +1,4 @@
-from sympy.polys.groebnertools import sig
+import math
 import torch
 import wandb
 import pprint
@@ -18,6 +18,47 @@ from segment_anything.modeling.mask_decoder import MaskDecoder
 from segment_anything.modeling.prompt_encoder import PromptEncoder
 from segment_anything.modeling.transformer import TwoWayTransformer
 from segment_anything.modeling.image_encoder import ImageEncoderViT
+
+
+class _LoRA_qkv(nn.Module):
+    """In Sam it is implemented as
+    self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+    B, N, C = x.shape
+    qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv.unbind(0)
+    """
+
+    def __init__(
+        self,
+        qkv: nn.Module,
+        linear_a_q: nn.Module,
+        linear_b_q: nn.Module,
+        linear_a_v: nn.Module,
+        linear_b_v: nn.Module,
+    ):
+        super().__init__()
+        # self.qkv = qkv
+        # 원본 weight와 bias를 detach하여 gradient 계산에서 제외
+        self.register_buffer("weight", qkv.weight.detach().clone())
+        if qkv.bias is not None:
+            self.register_buffer("bias", qkv.bias.detach().clone())
+        else:
+            self.register_buffer("bias", None)
+        self.linear_a_q = linear_a_q
+        self.linear_b_q = linear_b_q
+        self.linear_a_v = linear_a_v
+        self.linear_b_v = linear_b_v
+        self.dim = qkv.in_features
+        self.w_identity = torch.eye(qkv.in_features)
+
+    def forward(self, x):
+        # weight와 bias는 buffer로 등록되어 gradient 계산에서 제외됨
+        qkv = F.linear(x, self.weight, self.bias)
+        new_q = self.linear_b_q(self.linear_a_q(x))
+        new_v = self.linear_b_v(self.linear_a_v(x))
+        qkv[:, :, :, : self.dim] += new_q
+        qkv[:, :, :, -self.dim :] += new_v
+        return qkv
 
 
 class SAMRoadplus(pl.LightningModule):
@@ -111,12 +152,65 @@ class SAMRoadplus(pl.LightningModule):
             self.decoder_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=2) for _ in range(self.config.DECODER_COUNT)]
             )
-            self.decoder_keypoint_var_list = nn.ModuleList(
-                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
-            )
             self.decoder_road_var_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
             )
+            self.decoder_keypoint_var_list = nn.ModuleList(
+                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
+            )
+
+        #### LORA
+        if config.ENCODER_LORA:
+            r = self.config.LORA_RANK
+            lora_layer_selection = None
+            assert r > 0
+            if lora_layer_selection:
+                self.lora_layer_selection = lora_layer_selection
+            else:
+                # image encoder의 block 수만큼
+                self.lora_layer_selection = list(range(len(self.image_encoder.blocks)))
+
+            self.w_As = []
+            self.w_Bs = []
+
+            # image encoder Freeze
+            for param in self.image_encoder.parameters():
+                param.requires_grad = False
+
+            # 저차원 -> 고차원
+            for t_layer_i, blk in enumerate(self.image_encoder.blocks):
+                # 선택한 layer에 대해서만 진행하고 싶으면
+                if t_layer_i not in self.lora_layer_selection:
+                    continue
+                w_qkv_linear = blk.attn.qkv
+                dim = w_qkv_linear.in_features
+
+                # Query에 대한 LoRA Adapter
+                w_a_linear_q = nn.Linear(dim, r, bias=False)
+                w_b_linear_q = nn.Linear(r, dim, bias=False)
+
+                # Value에 대한 LoRA Adapter
+                w_a_linear_v = nn.Linear(dim, r, bias=False)
+                w_b_linear_v = nn.Linear(r, dim, bias=False)
+
+                self.w_As.append(w_a_linear_q)
+                self.w_Bs.append(w_b_linear_q)
+                self.w_As.append(w_a_linear_v)
+                self.w_Bs.append(w_b_linear_v)
+
+                blk.attn.qkv = _LoRA_qkv(
+                    w_qkv_linear,
+                    w_a_linear_q,
+                    w_b_linear_q,
+                    w_a_linear_v,
+                    w_b_linear_v,
+                )
+            # A는 랜덤 초기화 He initialization
+            for w_A in self.w_As:  # a는 leaky relu의 negative slope
+                nn.init.kaiming_uniform_(w_A.weight, a=math.sqrt(5))
+            # LoRA에서 B는 원래 0으로 초기화
+            for w_B in self.w_Bs:
+                nn.init.zeros_(w_B.weight)
 
         reduction = "mean" if not self.config.ALEATORIC else "none"
         self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
