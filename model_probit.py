@@ -1,13 +1,12 @@
-from sympy.polys.groebnertools import sig
 import torch
 import wandb
-import pprint
 import vitdet
 import lightning.pytorch as pl
 import torch.nn.functional as F
 
 from torch import nn
 from functools import partial
+from utils import tensor_to_heatmap
 from navie_decoder import NaiveDecoder
 from torchmetrics.classification import (
     BinaryJaccardIndex,
@@ -124,6 +123,9 @@ class SAMRoadplus(pl.LightningModule):
         # probit approximation
         self.register_buffer("probit_scale", torch.tensor(torch.pi**2 / 8), False)
 
+        # softplus 사용
+        self.positive_transform = F.softplus if config.SOFTPLUS else torch.exp
+
         #### Metrics
         if self.config.COMBINE_LOSS == "KLDivLoss":
             self.kl_div_criterion = torch.nn.KLDivLoss(reduction="batchmean")
@@ -166,6 +168,11 @@ class SAMRoadplus(pl.LightningModule):
 
             self.matched_param_names = set(matched_names)
             self.load_state_dict(state_dict_to_load, strict=False)
+
+    def _compute_var(self, x):
+        return (
+            self.positive_transform(x) * self.config.POSITIVE_SCALE + self.config.OFFSET
+        )
 
     def resize_sam_pos_embed(
         self, state_dict, image_size, vit_patch_size, encoder_global_attn_indexes
@@ -300,8 +307,9 @@ class SAMRoadplus(pl.LightningModule):
 
                 # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
                 # B, H, W
-                keypoint_var = torch.exp(keypoint_log_var) + self.config.OFFSET
-                road_var = torch.exp(road_log_var) + self.config.OFFSET
+
+                keypoint_var = self._compute_var(keypoint_log_var)
+                road_var = self._compute_var(road_log_var)
 
                 keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
                 road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
@@ -390,8 +398,8 @@ class SAMRoadplus(pl.LightningModule):
 
                 # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
                 # B, H, W
-                keypoint_var = torch.exp(keypoint_log_var) + self.config.OFFSET
-                road_var = torch.exp(road_log_var) + self.config.OFFSET
+                keypoint_var = self._compute_var(keypoint_log_var)
+                road_var = self._compute_var(road_log_var)
 
                 keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
                 road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
@@ -494,22 +502,29 @@ class SAMRoadplus(pl.LightningModule):
                     road_var_map = road_mask_vars[:max_viz_num, :, :, 0]
                     keypoint_var_map = keypoint_mask_vars[:max_viz_num, :, :, 0]
 
-                    road_var_map = torch.exp(road_var_map)
-                    keypoint_var_map = torch.exp(keypoint_var_map)
+                    road_var_map = self._compute_var(road_var_map)
+                    keypoint_var_map = self._compute_var(keypoint_var_map)
 
-                    road_var_map = (road_var_map - road_var_map.min()) / (
-                        road_var_map.max() - road_var_map.min() + 1e-8
-                    )
-                    keypoint_var_map = (keypoint_var_map - keypoint_var_map.min()) / (
-                        keypoint_var_map.max() - keypoint_var_map.min() + 1e-8
-                    )
+                    road_var_map = [tensor_to_heatmap(x) for x in road_var_map]
+                    keypoint_var_map = [tensor_to_heatmap(x) for x in keypoint_var_map]
+
+                    # road_var_map = (road_var_map - road_var_map.min()) / (
+                    #     road_var_map.max() - road_var_map.min() + 1e-8
+                    # )
+                    # keypoint_var_map = (keypoint_var_map - keypoint_var_map.min()) / (
+                    #     keypoint_var_map.max() - keypoint_var_map.min() + 1e-8
+                    # )
                     viz_road_var_list.append(road_var_map)
                     viz_keypoint_var_list.append(keypoint_var_map)
                 zip_list += viz_road_var_list
                 zip_list += viz_keypoint_var_list
 
+            # 이거 맞나
             data = [
-                [wandb.Image(x.cpu().numpy()) for x in row]
+                [
+                    x if isinstance(x, wandb.Image) else wandb.Image(x.cpu().numpy())
+                    for x in row
+                ]
                 for row in list(zip(*zip_list))
             ]
             self.logger.log_table(key="viz_table", columns=columns, data=data)

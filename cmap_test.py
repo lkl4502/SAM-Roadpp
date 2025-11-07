@@ -1,5 +1,6 @@
 import cv2
 import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from utils import load_config
@@ -167,10 +168,10 @@ def variance_map_heatmap(config_path, ckpt_path, img_path, gt_path, output_name)
 
 
 # EMA variance map
-ckpt_path = "/home/lkl4502/SAM-Roadpp/lightning_logs/8coq27xv/checkpoints/epoch=27-step=4032.ckpt"
-config_path = (
-    "/home/lkl4502/SAM-Roadpp/config/city-scale/toponet_vitb_512/EMA_0.9999.yaml"
-)
+# ckpt_path = "/home/lkl4502/SAM-Roadpp/lightning_logs/8coq27xv/checkpoints/epoch=27-step=4032.ckpt"
+# config_path = (
+#     "/home/lkl4502/SAM-Roadpp/config/city-scale/toponet_vitb_512/EMA_0.9999.yaml"
+# )
 
 
 # kuma_variance_map
@@ -178,8 +179,41 @@ config_path = (
 # ckpt_path = "/home/lkl4502/SAM-Roadpp/lightning_logs/kuma_1e-1_108/checkpoints/epoch=10-step=1584.ckpt"
 # img_path = "/home/lkl4502/data/Aerial/RoadGraph/cityscale/20cities/region_108_sat.png"
 # gt_path = "/home/lkl4502/data/Aerial/RoadGraph/cityscale/20cities/region_108_gt.png"
-img_path = "/home/lkl4502/data/Global-Scale/Global-Scale/out_of_domain/region_0_sat.png"
-gt_path = "/home/lkl4502/data/Global-Scale/Global-Scale/out_of_domain/region_0_gt.png"
+# img_path = "/home/lkl4502/data/Global-Scale/Global-Scale/out_of_domain/region_0_sat.png"
+# gt_path = "/home/lkl4502/data/Global-Scale/Global-Scale/out_of_domain/region_0_gt.png"
 # kuma_variance_map(path, ckpt_path, img_path, gt_path, "kuma_variance_map2.png")
 
-variance_map_heatmap(config_path, ckpt_path, img_path, gt_path, "variance_map.png")
+# variance_map_heatmap(config_path, ckpt_path, img_path, gt_path, "variance_map.png")
+
+# x = torch.linspace(-5, 5, 500)
+
+# scale = 0.9
+# offset = 0.1
+
+# y_exp = torch.exp(x)
+# y_softplus = F.softplus(x)
+# y_scaled_softplus = offset + scale * y_softplus
+
+# plt.figure(figsize=(8, 16))
+# plt.plot(x, y_exp, "--", label="exp(x)", alpha=0.7)
+# plt.plot(x, y_softplus, label=f"softplus(x), beta=1")
+# plt.plot(x, y_scaled_softplus, label=f"{offset} + {scale} * softplus(x)", linewidth=2)
+# plt.title("exp(x) vs softplus(x) with scaling and offset")
+# plt.xlabel("x")
+# plt.ylabel("y")
+
+# plt.ylim(-1, 10)
+# plt.legend()
+
+# # 중앙에 x축과 y축 추가
+# ax = plt.gca()
+# ax.spines["left"].set_position("zero")
+# ax.spines["bottom"].set_position("zero")
+# ax.spines["right"].set_color("none")
+# ax.spines["top"].set_color("none")
+# ax.xaxis.set_ticks_position("bottom")
+# ax.yaxis.set_ticks_position("left")
+
+# plt.grid(True)
+# plt.show()
+# plt.savefig("graph_test.png")

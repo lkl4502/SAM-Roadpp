@@ -45,7 +45,7 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "Probit approximation 0.1 (108)"
+WANDB_EXPERIMENT_NAME: "SoftPlus offset 0.1, weight 0.9"
 
 # Decoder 간 거리 조정
 COMBINE_LOSS: False
@@ -58,8 +58,8 @@ ALEATORIC: True
 
 # 하한 조정
 OFFSET: 0.1
-POSITIVE_SCALE: 1.0
-SOFTPLUS: False
+POSITIVE_SCALE: 0.9
+SOFTPLUS: True
 
 # 시각화 image index
 VIZ_IDX: 15 # 108 image

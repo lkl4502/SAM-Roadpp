@@ -58,6 +58,8 @@ ALEATORIC: True
 
 # 하한 조정
 OFFSET: 0.01
+POSITIVE_SCALE: 1.0
+SOFTPLUS: False
 
 # 시각화 image index
 VIZ_IDX: 15 # 108 image
