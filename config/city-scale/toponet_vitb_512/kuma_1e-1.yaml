@@ -48,7 +48,7 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "Kumaraswamy - offset 0.1"
+WANDB_EXPERIMENT_NAME: "Kumaraswamy - offset 0.1 (108)"
 
 # Decoder 수
 DECODER_COUNT: 1
@@ -64,4 +64,4 @@ COMBINE_LOSS: False
 OFFSET: 0.1
 
 # 시각화 image index
-VIZ_IDX: 19 # 129 image
+VIZ_IDX: 15 # 108 image

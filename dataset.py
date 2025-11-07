@@ -478,7 +478,7 @@ class SatMapDataset(Dataset):
             tile_indices = tile_indices[:4]
 
         for tile_idx in tile_indices:
-            print(f"loading tile {tile_idx}")
+            # print(f"loading tile {tile_idx}")
             rgb_path = rgb_pattern.format(tile_idx)
             road_mask_path = road_mask_pattern.format(tile_idx)
             keypoint_mask_path = keypoint_mask_pattern.format(tile_idx)

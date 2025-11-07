@@ -111,9 +111,18 @@ class SAMRoadplus(pl.LightningModule):
             self.decoder_list = nn.ModuleList(
                 [NaiveDecoder(out_channels=2) for _ in range(self.config.DECODER_COUNT)]
             )
+            self.decoder_keypoint_var_list = nn.ModuleList(
+                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
+            )
+            self.decoder_road_var_list = nn.ModuleList(
+                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
+            )
 
         reduction = "mean" if not self.config.ALEATORIC else "none"
-        self.mask_criterion = torch.nn.BCELoss(reduction=reduction)
+        self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
+
+        # probit approximation
+        self.register_buffer("probit_scale", torch.tensor(torch.pi**2 / 8), False)
 
         #### Metrics
         if self.config.COMBINE_LOSS == "KLDivLoss":
@@ -227,23 +236,42 @@ class SAMRoadplus(pl.LightningModule):
             )
             mask_scores = torch.sigmoid(mask_logits)
         else:
-            kuma_a_b_list = [decoder(image_embeddings) for decoder in self.decoder_list]
-            # mask_scores_list = [torch.sigmoid(logits) for logits in mask_logits_list]
+            mask_logits_list = [
+                decoder(image_embeddings) for decoder in self.decoder_list
+            ]
+            mask_scores_list = [torch.sigmoid(logits) for logits in mask_logits_list]
+
+            mask_road_vars_list = [
+                decoder(image_embeddings) for decoder in self.decoder_road_var_list
+            ]
+            mask_keypoint_vars_list = [
+                decoder(image_embeddings) for decoder in self.decoder_keypoint_var_list
+            ]
 
         # image embedding + mask를 통해 graph points 주변 feature 샘플링
         # target_feature, target_point, source_feature
         # [B, 2, H, W]
 
-        kuma_a_b_list = list(map(lambda x: x.permute(0, 2, 3, 1), kuma_a_b_list))
-        # mask_scores_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_scores_list))
-        return kuma_a_b_list
-        # mask_scores_list,
+        mask_logits_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_logits_list))
+        mask_scores_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_scores_list))
+        mask_road_vars_list = list(
+            map(lambda x: x.permute(0, 2, 3, 1), mask_road_vars_list)
+        )
+        mask_keypoint_vars_list = list(
+            map(lambda x: x.permute(0, 2, 3, 1), mask_keypoint_vars_list)
+        )
+        return (
+            mask_logits_list,
+            mask_scores_list,
+            mask_road_vars_list,
+            mask_keypoint_vars_list,
+        )
 
     def training_step(self, batch, batch_idx):
         # masks: [B, H, W]
-        rgb, road_mask = (
+        rgb, keypoint_mask, road_mask = (
             batch["rgb"],
-            # batch["keypoint_mask"],
+            batch["keypoint_mask"],
             batch["road_mask"],
         )
         graph_points, pairs, valid = (
@@ -252,29 +280,68 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # [B, H, W, 2]
-        kuma_a_b_list = self(rgb, graph_points, pairs, valid)
-        # gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
+        mask_logits_list, _, mask_road_vars_list, mask_keypoint_vars_list = self(
+            rgb, graph_points, pairs, valid
+        )
+        gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
-        kuma_loss_list = []
-        for i, logits in enumerate(kuma_a_b_list):
-            kuma_logits = torch.exp(logits) + self.config.OFFSET
-            a, b = kuma_logits[..., 0], kuma_logits[..., 1]  # B, H, W
+        mask_loss_list = []
+        for i, logits in enumerate(mask_logits_list):
+            if self.config.ALEATORIC:
+                # logit 구분
+                # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
+                # B, H, W
+                keypoint_logits = logits[..., 0]
+                road_logits = logits[..., 1]
 
-            sampling_x = torch.rand(1, device=a.device).repeat(*a.shape)
+                # B, H, W
+                keypoint_log_var = mask_keypoint_vars_list[i].squeeze(-1)
+                road_log_var = mask_road_vars_list[i].squeeze(-1)
 
-            kuma_probs = (1 - sampling_x ** (1 / b)) ** (1 / a)  # B, H, W
+                # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
+                # B, H, W
+                keypoint_var = torch.exp(keypoint_log_var) + self.config.OFFSET
+                road_var = torch.exp(road_log_var) + self.config.OFFSET
 
-            with torch.amp.autocast("cuda", enabled=False):
-                kuma_loss = self.mask_criterion(kuma_probs, road_mask)
+                keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
+                road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
 
-            if torch.any(torch.isnan(kuma_loss)):
+                # B, H, W
+                keypoint_probit = keypoint_logits / keypoint_denominator
+                road_probit = road_logits / road_denominator
+
+                keypoint_probit_loss = self.mask_criterion(
+                    keypoint_probit, keypoint_mask
+                ).mean()
+                road_probit_loss = self.mask_criterion(road_probit, road_mask).mean()
+
+                mask_loss = (keypoint_probit_loss + road_probit_loss) / 2.0
+
+                self.log(
+                    "train_keypoint_mask_loss",
+                    keypoint_probit_loss,
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+                self.log(
+                    "train_road_mask_loss",
+                    road_probit_loss,
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+            else:
+                mask_loss = self.mask_criterion(logits, gt_masks)
+
+            if torch.any(torch.isnan(mask_loss)):
                 print(f"NaN detected in mask_loss_{i}. Using default loss value.")
-                kuma_loss = torch.tensor(0.0, device=kuma_loss.device)
+                mask_loss = torch.tensor(0.0, device=mask_loss.device)
 
-            kuma_loss_list.append(kuma_loss)
+            mask_loss_list.append(mask_loss)
 
-        total_kuma_loss = torch.stack(kuma_loss_list).mean()
-        total_loss = total_kuma_loss
+        total_mask_loss = torch.stack(mask_loss_list).mean()
+        total_loss = total_mask_loss
 
         self.log(
             "train_total_loss",
@@ -288,9 +355,9 @@ class SAMRoadplus(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         # masks: [B, H, W]
-        rgb, road_mask = (
+        rgb, keypoint_mask, road_mask = (
             batch["rgb"],
-            # batch["keypoint_mask"],
+            batch["keypoint_mask"],
             batch["road_mask"],
         )
         graph_points, pairs, valid = (
@@ -299,41 +366,75 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
-        kuma_a_b_list = self(rgb, graph_points, pairs, valid)
+        (
+            mask_logits_list,
+            _,
+            mask_road_vars_list,
+            mask_keypoint_vars_list,
+        ) = self(rgb, graph_points, pairs, valid)
+        gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
-        # gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
+        mask_loss_list = []
+        keypoint_probit_list, road_probit_list = [], []
+        for i, logits in enumerate(mask_logits_list):
+            if self.config.ALEATORIC:
+                # logit 구분
+                # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
+                # B, H, W
+                keypoint_logits = logits[..., 0]
+                road_logits = logits[..., 1]
 
-        kuma_loss_list = []
-        kuma_probs1_list, kuma_probs2_list, kuma_probs3_list = [], [], []
-        for i, logits in enumerate(kuma_a_b_list):
-            kuma_logits = torch.exp(logits) + self.config.OFFSET
-            a, b = kuma_logits[..., 0], kuma_logits[..., 1]  # B, H, W
+                # B, H, W
+                keypoint_log_var = mask_keypoint_vars_list[i].squeeze(-1)
+                road_log_var = mask_road_vars_list[i].squeeze(-1)
 
-            # NOTE Validation 할때는 sampling 횟수 추가
-            sampling_x1 = torch.rand(1, device=a.device).repeat(*a.shape)
-            sampling_x2 = torch.rand(1, device=a.device).repeat(*a.shape)
-            sampling_x3 = torch.rand(1, device=a.device).repeat(*a.shape)
+                # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
+                # B, H, W
+                keypoint_var = torch.exp(keypoint_log_var) + self.config.OFFSET
+                road_var = torch.exp(road_log_var) + self.config.OFFSET
 
-            kuma_probs1 = (1 - sampling_x1 ** (1 / b)) ** (1 / a)  # B, H, W
-            kuma_probs2 = (1 - sampling_x2 ** (1 / b)) ** (1 / a)  # B, H, W
-            kuma_probs3 = (1 - sampling_x3 ** (1 / b)) ** (1 / a)  # B, H, W
+                keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
+                road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
 
-            kuma_probs1_list.append(kuma_probs1)
-            kuma_probs2_list.append(kuma_probs2)
-            kuma_probs3_list.append(kuma_probs3)
+                # B, H, W
+                keypoint_probit = keypoint_logits / keypoint_denominator
+                road_probit = road_logits / road_denominator
 
-            # val loss 측정에는 sampling_x1으로
-            with torch.amp.autocast("cuda", enabled=False):
-                kuma_loss = self.mask_criterion(kuma_probs1, road_mask)
+                keypoint_probit_list.append(keypoint_probit)
+                road_probit_list.append(road_probit)
 
-            if torch.any(torch.isnan(kuma_loss)):
+                keypoint_probit_loss = self.mask_criterion(
+                    keypoint_probit, keypoint_mask
+                ).mean()
+                road_probit_loss = self.mask_criterion(road_probit, road_mask).mean()
+
+                mask_loss = (keypoint_probit_loss + road_probit_loss) / 2.0
+
+                self.log(
+                    "val_keypoint_mask_loss",
+                    keypoint_probit_loss,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+                self.log(
+                    "val_road_mask_loss",
+                    road_probit_loss,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+            else:
+                mask_loss = self.mask_criterion(logits, gt_masks)
+
+            if torch.any(torch.isnan(mask_loss)):
                 print(f"NaN detected in mask_loss_{i}. Using default loss value.")
-                kuma_loss = torch.tensor(0.0, device=kuma_loss.device)
+                mask_loss = torch.tensor(0.0, device=mask_loss.device)
 
-            kuma_loss_list.append(kuma_loss)
+            mask_loss_list.append(mask_loss)
 
-        total_kuma_loss = torch.stack(kuma_loss_list).mean()
-        total_loss = total_kuma_loss
+        total_mask_loss = torch.stack(mask_loss_list).mean()
+        total_loss = total_mask_loss
 
         self.log(
             "val_total_loss",
@@ -348,48 +449,64 @@ class SAMRoadplus(pl.LightningModule):
             max_viz_num = 4
             viz_rgb = rgb[:max_viz_num, :, :]
 
-            viz_kuma_probs1_list = [
-                probs[:max_viz_num, ...] for probs in kuma_probs1_list
+            viz_pred_keypoint_list = [
+                torch.sigmoid(keypoint_probit[:max_viz_num, :, :])
+                for keypoint_probit in keypoint_probit_list
             ]
-            viz_kuma_probs2_list = [
-                probs[:max_viz_num, ...] for probs in kuma_probs2_list
-            ]
-            viz_kuma_probs3_list = [
-                probs[:max_viz_num, ...] for probs in kuma_probs3_list
+            viz_pred_road_list = [
+                torch.sigmoid(road_probit[:max_viz_num, :, :])
+                for road_probit in road_probit_list
             ]
 
-            viz_kuma_probs_mean_list = [
-                (probs1 + probs2 + probs3) / 3
-                for probs1, probs2, probs3 in zip(
-                    *viz_kuma_probs1_list,
-                    *viz_kuma_probs2_list,
-                    *viz_kuma_probs3_list,
-                )
-            ]
-            viz_kuma_probs_mean_list = torch.stack(viz_kuma_probs_mean_list)
-
-            # viz_gt_keypoint = keypoint_mask[:max_viz_num, ...]
+            viz_gt_keypoint = keypoint_mask[:max_viz_num, ...]
             viz_gt_road = road_mask[:max_viz_num, ...]
 
-            kuma_probs_names = [f"kuma_probs{i}" for i in range(1, 4)]
+            pred_road_names = [
+                f"pred_road_probit{i}" for i in range(1, len(road_probit_list) + 1)
+            ]
+            pred_keypoint_names = [
+                f"pred_keypoint_probit{i}"
+                for i in range(1, len(keypoint_probit_list) + 1)
+            ]
 
             columns = [
                 "rgb",
-                # "gt_keypoint",
+                "gt_keypoint",
                 "gt_road",
-                *kuma_probs_names,
-                "kuma_probs_mean",
+                *pred_road_names,
+                *pred_keypoint_names,
             ]
 
             zip_list = [
                 viz_rgb,
-                # viz_gt_keypoint,
+                viz_gt_keypoint,
                 viz_gt_road,
-                *viz_kuma_probs1_list,
-                *viz_kuma_probs2_list,
-                *viz_kuma_probs3_list,
-                viz_kuma_probs_mean_list,
+                *viz_pred_road_list,
+                *viz_pred_keypoint_list,
             ]
+
+            if self.config.ALEATORIC:
+                columns += ["road_variance_map", "keypoint_variance_map"]
+                viz_road_var_list, viz_keypoint_var_list = [], []
+                for road_mask_vars, keypoint_mask_vars in zip(
+                    mask_road_vars_list, mask_keypoint_vars_list
+                ):
+                    road_var_map = road_mask_vars[:max_viz_num, :, :, 0]
+                    keypoint_var_map = keypoint_mask_vars[:max_viz_num, :, :, 0]
+
+                    road_var_map = torch.exp(road_var_map)
+                    keypoint_var_map = torch.exp(keypoint_var_map)
+
+                    road_var_map = (road_var_map - road_var_map.min()) / (
+                        road_var_map.max() - road_var_map.min() + 1e-8
+                    )
+                    keypoint_var_map = (keypoint_var_map - keypoint_var_map.min()) / (
+                        keypoint_var_map.max() - keypoint_var_map.min() + 1e-8
+                    )
+                    viz_road_var_list.append(road_var_map)
+                    viz_keypoint_var_list.append(keypoint_var_map)
+                zip_list += viz_road_var_list
+                zip_list += viz_keypoint_var_list
 
             data = [
                 [wandb.Image(x.cpu().numpy()) for x in row]
@@ -506,8 +623,29 @@ class SAMRoadplus(pl.LightningModule):
                     "lr": self.config.BASE_LR,
                 }
             ]
-
+            road_var_decoder_params = [
+                {
+                    "params": [
+                        p
+                        for decoder in self.decoder_road_var_list
+                        for p in decoder.parameters()
+                    ],
+                    "lr": self.config.BASE_LR,
+                }
+            ]
+            keypoint_var_decoder_params = [
+                {
+                    "params": [
+                        p
+                        for decoder in self.decoder_keypoint_var_list
+                        for p in decoder.parameters()
+                    ],
+                    "lr": self.config.BASE_LR,
+                }
+            ]
         param_dicts += decoder_params
+        param_dicts += road_var_decoder_params
+        param_dicts += keypoint_var_decoder_params
 
         for i, param_dict in enumerate(param_dicts):
             param_num = sum([int(p.numel()) for p in param_dict["params"]])

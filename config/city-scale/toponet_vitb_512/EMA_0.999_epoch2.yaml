@@ -10,14 +10,11 @@ BATCH_SIZE: 16
 DATA_WORKER_NUM: 16
 TRAIN_EPOCHS: 30
 BASE_LR: 0.001
+FREEZE_ENCODER: False
 ENCODER_LR_FACTOR: 0.1
+ENCODER_LORA: False
 FOCAL_LOSS: False
 USE_SAM_DECODER: False
-
-# LoRA
-ENCODER_LORA: True
-FREEZE_ENCODER: True
-LORA_RANK: 4
 
 # TOPONET
 # sample per patch
@@ -48,20 +45,24 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "Kumaraswamy - offset 0.01 (108)"
-
-# Decoder 수
-DECODER_COUNT: 1
-
-# 분산을 이용한 모델 학습
-# MC_SAMPLING: 50
-ALEATORIC: False
+WANDB_EXPERIMENT_NAME: "EMA 0.999 Epoch 2"
 
 # Decoder 간 거리 조정
 COMBINE_LOSS: False
+LOSS_WEIGHT: 0.1
+
+# 추가
+DECODER_COUNT: 1
+ALEATORIC: True
+# MC_SAMPLING: 50
 
 # 하한 조정
-OFFSET: 0.01
+OFFSET: 0.1
 
 # 시각화 image index
 VIZ_IDX: 15 # 108 image
+
+# EMA
+USE_EMA: True
+EMA_DECAY: 0.999
+EMA_START_EPOCH: 2 # EMA 시작 epoch
