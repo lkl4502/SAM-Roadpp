@@ -1,13 +1,34 @@
+import os
+import io
 import yaml
+import wandb
+import matplotlib.pyplot as plt
+
+from PIL import Image
 from addict import Dict
 from datetime import datetime
-import os
 
 
 def load_config(path):
     with open(path) as file:
         config_dict = yaml.safe_load(file)
     return Dict(config_dict)
+
+
+def tensor_to_heatmap(tensor):
+    fig, ax = plt.subplots()
+    im = ax.imshow(tensor.cpu().numpy(), cmap="magma")
+    ax.axis("off")
+
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=8)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+    buf.seek(0)
+
+    return wandb.Image(Image.open(buf))
 
 
 def create_output_dir_and_save_config(output_dir_prefix, config, specified_dir=None):

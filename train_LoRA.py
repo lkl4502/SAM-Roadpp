@@ -4,10 +4,10 @@ import wandb
 import lightning.pytorch as pl
 
 from utils import load_config
-from model import SAMRoadplus
+from model_LoRA import SAMRoadplus
 from dotenv import load_dotenv
 from argparse import ArgumentParser
-from dataset_refactor import SatMapDataset, graph_collate_fn
+from dataset import SatMapDataset, graph_collate_fn
 from torch.utils.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -78,15 +78,10 @@ if __name__ == "__main__":
         collate_fn=graph_collate_fn,
     )
 
-    lr_monitor = LearningRateMonitor(logging_interval="step")
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"outputs/{config.WANDB_PROJECT_NAME}/{config.WANDB_EXPERIMENT_NAME}",
-        filename="{epoch:02d}-{val_loss:.4f}",
-        every_n_epochs=1,
-        save_top_k=3,
-        monitor="val_loss",
-        mode="min",
+        every_n_epochs=1, save_top_k=3, monitor="val_total_loss", mode="min"
     )
+    lr_monitor = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger()
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,

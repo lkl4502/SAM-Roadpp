@@ -285,8 +285,25 @@ class SAMRoadplus(pl.LightningModule):
 
             mask_loss_list.append(mask_loss)
 
-        total_mask_loss = torch.stack(mask_loss_list).mean()
-        total_loss = total_mask_loss
+        total_mask_loss = torch.stack(mask_loss_list)
+
+        if self.config.LTA:  # loser takes all
+            selected_decoder_index = total_mask_loss.argmax()
+            selected_loss = total_mask_loss[selected_decoder_index]
+        elif self.config.WTA:  # winner takes all
+            selected_decoder_index = total_mask_loss.argmin()
+            selected_loss = total_mask_loss[selected_decoder_index]
+        else:
+            selected_loss = total_mask_loss.mean()
+
+        self.log(
+            "update decoder",
+            selected_decoder_index,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
+        total_loss = selected_loss
 
         if self.config.COMBINE_LOSS:
             combine_loss_list = []
@@ -312,19 +329,11 @@ class SAMRoadplus(pl.LightningModule):
                         else:
                             f1, f2 = mask_scores_list[i], mask_scores_list[j]
 
-                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
                             road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
+                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
 
                             # NOTE 현재는 동일 가중치, 이후에 조정하는 실험 시도 가능성
                             combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
-
-                            self.log(
-                                f"train_keypoint_l2_loss_{i}_{j}",
-                                keypoint_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
-                                prog_bar=False,
-                            )
 
                             self.log(
                                 f"train_road_l2_loss_{i}_{j}",
@@ -334,37 +343,45 @@ class SAMRoadplus(pl.LightningModule):
                                 prog_bar=False,
                             )
 
+                            self.log(
+                                f"train_keypoint_l2_loss_{i}_{j}",
+                                keypoint_l2_loss,
+                                on_step=True,
+                                on_epoch=False,
+                                prog_bar=False,
+                            )
+
                         log_name = f"train_l2_loss_{i}_{j}"
 
                     elif self.config.COMBINE_LOSS == "Cosine Similarity":
                         f1, f2 = mask_logits_list[i], mask_logits_list[j]
-                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
-                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
-
                         f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
                         f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
 
+                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
+                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
+
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
                         keypoint_cos_similarity = (
                             (f1_keypoint * f2_keypoint).sum(dim=1).mean()
                         )
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
 
                         combine_loss = (
-                            keypoint_cos_similarity + road_cos_similarity
+                            road_cos_similarity + keypoint_cos_similarity
                         ) / 2
                         log_name = f"train_cos_similarity_{i}_{j}"
 
                         self.log(
-                            f"train_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
+                            f"train_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
                             on_step=True,
                             on_epoch=False,
                             prog_bar=False,
                         )
 
                         self.log(
-                            f"train_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
+                            f"train_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
                             on_step=True,
                             on_epoch=False,
                             prog_bar=False,
@@ -400,13 +417,13 @@ class SAMRoadplus(pl.LightningModule):
             else:
                 total_loss += self.config.LOSS_WEIGHT * total_combine_loss
 
-        self.log(
-            "train_total_mask_loss",
-            total_mask_loss,
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
-        )
+        # self.log(
+        #     "train_total_mask_loss",
+        #     total_mask_loss,
+        #     on_step=True,
+        #     on_epoch=False,
+        #     prog_bar=True,
+        # )
 
         self.log(
             "train_total_loss",
@@ -460,8 +477,16 @@ class SAMRoadplus(pl.LightningModule):
 
             mask_loss_list.append(mask_loss)
 
-        total_mask_loss = torch.stack(mask_loss_list).mean()
-        total_loss = total_mask_loss
+        total_mask_loss = torch.stack(mask_loss_list)
+
+        # if self.config.LTA:  # loser takes all
+        #     selected_loss = total_mask_loss.min()
+        # elif self.config.WTA:  # winner takes all
+        #     selected_loss = total_mask_loss.max()
+        # else:
+        selected_loss = total_mask_loss.mean()
+
+        total_loss = selected_loss
 
         if self.config.COMBINE_LOSS:
             combine_loss_list = []
@@ -487,17 +512,9 @@ class SAMRoadplus(pl.LightningModule):
                         else:
                             f1, f2 = mask_scores_list[i], mask_scores_list[j]
 
-                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
                             road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
-                            combine_loss = (keypoint_l2_loss + road_l2_loss) / 2
-
-                            self.log(
-                                f"val_keypoint_l2_loss_{i}_{j}",
-                                keypoint_l2_loss,
-                                on_step=False,
-                                on_epoch=True,
-                                prog_bar=True,
-                            )
+                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
+                            combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
 
                             self.log(
                                 f"val_road_l2_loss_{i}_{j}",
@@ -507,38 +524,45 @@ class SAMRoadplus(pl.LightningModule):
                                 prog_bar=True,
                             )
 
+                            self.log(
+                                f"val_keypoint_l2_loss_{i}_{j}",
+                                keypoint_l2_loss,
+                                on_step=False,
+                                on_epoch=True,
+                                prog_bar=True,
+                            )
+
                         log_name = f"val_l2_loss_{i}_{j}"
 
                     elif self.config.COMBINE_LOSS == "Cosine Similarity":
                         f1, f2 = mask_logits_list[i], mask_logits_list[j]
+                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
+                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
 
                         f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
                         f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
 
-                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
-                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
-
+                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
                         keypoint_cos_similarity = (
                             (f1_keypoint * f2_keypoint).sum(dim=1).mean()
                         )
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
 
                         combine_loss = (
-                            keypoint_cos_similarity + road_cos_similarity
+                            road_cos_similarity + keypoint_cos_similarity
                         ) / 2
                         log_name = f"val_cos_similarity_{i}_{j}"
 
                         self.log(
-                            f"val_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
+                            f"val_road_cos_similarity_{i}_{j}",
+                            road_cos_similarity,
                             on_step=False,
                             on_epoch=True,
                             prog_bar=True,
                         )
 
                         self.log(
-                            f"val_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
+                            f"val_keypoint_cos_similarity_{i}_{j}",
+                            keypoint_cos_similarity,
                             on_step=False,
                             on_epoch=True,
                             prog_bar=True,
@@ -574,13 +598,13 @@ class SAMRoadplus(pl.LightningModule):
             else:
                 total_loss += self.config.LOSS_WEIGHT * total_combine_loss
 
-        self.log(
-            "val_total_mask_loss",
-            total_mask_loss,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-        )
+        # self.log(
+        #     "val_total_mask_loss",
+        #     total_mask_loss,
+        #     on_step=False,
+        #     on_epoch=True,
+        #     prog_bar=True,
+        # )
 
         self.log(
             "val_total_loss",

@@ -36,3 +36,8 @@ train*.bash
 
 # txt 파일
 *.txt
+
+# image 파일
+*.png
+*.jpeg
+*.jpg

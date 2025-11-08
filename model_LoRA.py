@@ -1,3 +1,4 @@
+import math
 import torch
 import wandb
 import pprint
@@ -17,6 +18,47 @@ from segment_anything.modeling.mask_decoder import MaskDecoder
 from segment_anything.modeling.prompt_encoder import PromptEncoder
 from segment_anything.modeling.transformer import TwoWayTransformer
 from segment_anything.modeling.image_encoder import ImageEncoderViT
+
+
+class _LoRA_qkv(nn.Module):
+    """In Sam it is implemented as
+    self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+    B, N, C = x.shape
+    qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv.unbind(0)
+    """
+
+    def __init__(
+        self,
+        qkv: nn.Module,
+        linear_a_q: nn.Module,
+        linear_b_q: nn.Module,
+        linear_a_v: nn.Module,
+        linear_b_v: nn.Module,
+    ):
+        super().__init__()
+        # self.qkv = qkv
+        # 원본 weight와 bias를 detach하여 gradient 계산에서 제외
+        self.register_buffer("weight", qkv.weight.detach().clone())
+        if qkv.bias is not None:
+            self.register_buffer("bias", qkv.bias.detach().clone())
+        else:
+            self.register_buffer("bias", None)
+        self.linear_a_q = linear_a_q
+        self.linear_b_q = linear_b_q
+        self.linear_a_v = linear_a_v
+        self.linear_b_v = linear_b_v
+        self.dim = qkv.in_features
+        self.w_identity = torch.eye(qkv.in_features)
+
+    def forward(self, x):
+        # weight와 bias는 buffer로 등록되어 gradient 계산에서 제외됨
+        qkv = F.linear(x, self.weight, self.bias)
+        new_q = self.linear_b_q(self.linear_a_q(x))
+        new_v = self.linear_b_v(self.linear_a_v(x))
+        qkv[:, :, :, : self.dim] += new_q
+        qkv[:, :, :, -self.dim :] += new_v
+        return qkv
 
 
 class SAMRoadplus(pl.LightningModule):
@@ -107,13 +149,68 @@ class SAMRoadplus(pl.LightningModule):
             )
         else:
             #### Naive decoder
-            out_channels = 2 if not self.config.ALEATORIC else 3
             self.decoder_list = nn.ModuleList(
-                [
-                    NaiveDecoder(out_channels=out_channels)
-                    for _ in range(self.config.DECODER_COUNT)
-                ]
+                [NaiveDecoder(out_channels=2) for _ in range(self.config.DECODER_COUNT)]
             )
+            self.decoder_road_var_list = nn.ModuleList(
+                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
+            )
+            self.decoder_keypoint_var_list = nn.ModuleList(
+                [NaiveDecoder(out_channels=1) for _ in range(self.config.DECODER_COUNT)]
+            )
+
+        #### LORA
+        if config.ENCODER_LORA:
+            r = self.config.LORA_RANK
+            lora_layer_selection = None
+            assert r > 0
+            if lora_layer_selection:
+                self.lora_layer_selection = lora_layer_selection
+            else:
+                # image encoder의 block 수만큼
+                self.lora_layer_selection = list(range(len(self.image_encoder.blocks)))
+
+            self.w_As = []
+            self.w_Bs = []
+
+            # image encoder Freeze
+            for param in self.image_encoder.parameters():
+                param.requires_grad = False
+
+            # 저차원 -> 고차원
+            for t_layer_i, blk in enumerate(self.image_encoder.blocks):
+                # 선택한 layer에 대해서만 진행하고 싶으면
+                if t_layer_i not in self.lora_layer_selection:
+                    continue
+                w_qkv_linear = blk.attn.qkv
+                dim = w_qkv_linear.in_features
+
+                # Query에 대한 LoRA Adapter
+                w_a_linear_q = nn.Linear(dim, r, bias=False)
+                w_b_linear_q = nn.Linear(r, dim, bias=False)
+
+                # Value에 대한 LoRA Adapter
+                w_a_linear_v = nn.Linear(dim, r, bias=False)
+                w_b_linear_v = nn.Linear(r, dim, bias=False)
+
+                self.w_As.append(w_a_linear_q)
+                self.w_Bs.append(w_b_linear_q)
+                self.w_As.append(w_a_linear_v)
+                self.w_Bs.append(w_b_linear_v)
+
+                blk.attn.qkv = _LoRA_qkv(
+                    w_qkv_linear,
+                    w_a_linear_q,
+                    w_b_linear_q,
+                    w_a_linear_v,
+                    w_b_linear_v,
+                )
+            # A는 랜덤 초기화 He initialization
+            for w_A in self.w_As:  # a는 leaky relu의 negative slope
+                nn.init.kaiming_uniform_(w_A.weight, a=math.sqrt(5))
+            # LoRA에서 B는 원래 0으로 초기화
+            for w_B in self.w_Bs:
+                nn.init.zeros_(w_B.weight)
 
         reduction = "mean" if not self.config.ALEATORIC else "none"
         self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
@@ -235,13 +332,31 @@ class SAMRoadplus(pl.LightningModule):
             ]
             mask_scores_list = [torch.sigmoid(logits) for logits in mask_logits_list]
 
+            mask_road_vars_list = [
+                decoder(image_embeddings) for decoder in self.decoder_road_var_list
+            ]
+            mask_keypoint_vars_list = [
+                decoder(image_embeddings) for decoder in self.decoder_keypoint_var_list
+            ]
+
         # image embedding + mask를 통해 graph points 주변 feature 샘플링
         # target_feature, target_point, source_feature
         # [B, 2, H, W]
 
         mask_logits_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_logits_list))
         mask_scores_list = list(map(lambda x: x.permute(0, 2, 3, 1), mask_scores_list))
-        return mask_logits_list, mask_scores_list
+        mask_road_vars_list = list(
+            map(lambda x: x.permute(0, 2, 3, 1), mask_road_vars_list)
+        )
+        mask_keypoint_vars_list = list(
+            map(lambda x: x.permute(0, 2, 3, 1), mask_keypoint_vars_list)
+        )
+        return (
+            mask_logits_list,
+            mask_scores_list,
+            mask_road_vars_list,
+            mask_keypoint_vars_list,
+        )
 
     def training_step(self, batch, batch_idx):
         # masks: [B, H, W]
@@ -256,18 +371,100 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # [B, H, W, 2]
-        mask_logits_list, mask_scores_list = self(rgb, graph_points, pairs, valid)
+        mask_logits_list, _, mask_road_vars_list, mask_keypoint_vars_list = self(
+            rgb, graph_points, pairs, valid
+        )
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
         mask_loss_list = []
         for i, logits in enumerate(mask_logits_list):
-            if self.config.ALEATORIC:  # 3채널은 분산정보
-                new_logits = logits[..., :2]
-                uncertainty = logits[..., 2].unsqueeze(-1)
+            if self.config.ALEATORIC:
+                # logit 구분
+                # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
+                # B, H, W
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
-                tmp_mask_loss = self.mask_criterion(new_logits, gt_masks)
-                tmp_loss = tmp_mask_loss * torch.exp(-uncertainty) + uncertainty
-                mask_loss = tmp_loss.mean()
+                # B, H, W
+                road_vars = mask_road_vars_list[i].squeeze(-1)
+                keypoint_vars = mask_keypoint_vars_list[i].squeeze(-1)
+
+                # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
+                # B, H, W
+                road_sigma = torch.sqrt(torch.exp(road_vars))
+                keypoint_sigma = torch.sqrt(torch.exp(keypoint_vars))
+
+                # 정규 분포에서 샘플링
+                # [T, B, H, W]
+                road_epsilon = torch.randn(
+                    self.config.MC_SAMPLING, *road_sigma.shape, device=road_sigma.device
+                )
+                keypoint_epsilon = torch.randn(
+                    self.config.MC_SAMPLING,
+                    *keypoint_sigma.shape,
+                    device=keypoint_sigma.device,
+                )
+
+                # MC Sampling을 위한 브로드캐스팅 준비
+                # 1, B, H, W
+                road_logits = road_logits.unsqueeze(0)
+                keypoint_logits = keypoint_logits.unsqueeze(0)
+                road_sigma = road_sigma.unsqueeze(0)
+                keypoint_sigma = keypoint_sigma.unsqueeze(0)
+
+                # T, B, H, W
+                road_x_hat = road_logits + road_sigma * road_epsilon
+                keypoint_x_hat = keypoint_logits + keypoint_sigma * keypoint_epsilon
+
+                # T, B, H, W
+                # loss에서 브로드캐스팅 되나..?
+                gt_road_repeat = road_mask[None, ...].repeat(
+                    *([self.config.MC_SAMPLING] + [1 for _ in range(road_mask.ndim)])
+                )
+                gt_keypoint_repeat = keypoint_mask[None, ...].repeat(
+                    *(
+                        [self.config.MC_SAMPLING]
+                        + [1 for _ in range(keypoint_mask.ndim)]
+                    )
+                )
+
+                loss_road_mc = self.mask_criterion(road_x_hat, gt_road_repeat)
+                loss_keypoint_mc = self.mask_criterion(
+                    keypoint_x_hat, gt_keypoint_repeat
+                )
+
+                mask_road_loss = loss_road_mc.mean(dim=0).mean()
+                mask_keypoint_loss = loss_keypoint_mc.mean(dim=0).mean()
+
+                self.log(
+                    "train_road_mean_variance",
+                    torch.exp(road_vars).mean(),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+                self.log(
+                    "train_road_mean_std",
+                    torch.mean(road_sigma),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+                self.log(
+                    "train_keypoint_mean_variance",
+                    torch.exp(keypoint_vars).mean(),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+                self.log(
+                    "train_keypoint_mean_std",
+                    torch.mean(keypoint_sigma),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True,
+                )
+                mask_loss = (mask_road_loss + mask_keypoint_loss) / 2.0
             else:
                 mask_loss = self.mask_criterion(logits, gt_masks)
 
@@ -275,138 +472,10 @@ class SAMRoadplus(pl.LightningModule):
                 print(f"NaN detected in mask_loss_{i}. Using default loss value.")
                 mask_loss = torch.tensor(0.0, device=mask_loss.device)
 
-            self.log(
-                f"train_mask_loss_{i}",
-                mask_loss,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=True,
-            )
-
             mask_loss_list.append(mask_loss)
 
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
-
-        if self.config.COMBINE_LOSS:
-            combine_loss_list = []
-            for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
-                for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.COMBINE_LOSS == "KLDivLoss":
-                        log_p = F.log_softmax(mask_logits_list[i], dim=-1)
-                        q = F.softmax(mask_logits_list[j], dim=-1)
-
-                        combine_loss = self.kl_div_criterion(log_p, q)
-                        log_name = f"train_kl_div_loss_{i}_{j}"
-
-                    elif self.config.COMBINE_LOSS == "L2 Loss":
-                        if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                            f1_mean = mask_logits_list[i].mean(dim=(1, 2), keepdim=True)
-                            f1_std = mask_logits_list[i].std(dim=(1, 2), keepdim=True)
-                            f1 = (mask_logits_list[i] - f1_mean) / (f1_std + 1e-8)
-
-                            f2_mean = mask_logits_list[j].mean(dim=(1, 2), keepdim=True)
-                            f2_std = mask_logits_list[j].std(dim=(1, 2), keepdim=True)
-                            f2 = (mask_logits_list[j] - f2_mean) / (f2_std + 1e-8)
-                            combine_loss = ((f1 - f2) ** 2).mean()
-                        else:
-                            f1, f2 = mask_scores_list[i], mask_scores_list[j]
-
-                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
-                            road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
-
-                            # NOTE 현재는 동일 가중치, 이후에 조정하는 실험 시도 가능성
-                            combine_loss = (road_l2_loss + keypoint_l2_loss) / 2
-
-                            self.log(
-                                f"train_keypoint_l2_loss_{i}_{j}",
-                                keypoint_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
-                                prog_bar=False,
-                            )
-
-                            self.log(
-                                f"train_road_l2_loss_{i}_{j}",
-                                road_l2_loss,
-                                on_step=True,
-                                on_epoch=False,
-                                prog_bar=False,
-                            )
-
-                        log_name = f"train_l2_loss_{i}_{j}"
-
-                    elif self.config.COMBINE_LOSS == "Cosine Similarity":
-                        f1, f2 = mask_logits_list[i], mask_logits_list[j]
-                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
-                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
-
-                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
-                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
-
-                        keypoint_cos_similarity = (
-                            (f1_keypoint * f2_keypoint).sum(dim=1).mean()
-                        )
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
-
-                        combine_loss = (
-                            keypoint_cos_similarity + road_cos_similarity
-                        ) / 2
-                        log_name = f"train_cos_similarity_{i}_{j}"
-
-                        self.log(
-                            f"train_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
-                            on_step=True,
-                            on_epoch=False,
-                            prog_bar=False,
-                        )
-
-                        self.log(
-                            f"train_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
-                            on_step=True,
-                            on_epoch=False,
-                            prog_bar=False,
-                        )
-
-                    self.log(
-                        log_name,
-                        combine_loss,
-                        on_step=True,
-                        on_epoch=False,
-                        prog_bar=True,
-                    )
-                    combine_loss_list.append(combine_loss)
-
-            total_combine_loss = torch.stack(combine_loss_list).mean()
-            if self.config.COMBINE_LOSS == "KLDivLoss":
-                train_total_loss_name = "train_total_kl_div_loss"
-            elif self.config.COMBINE_LOSS == "L2 Loss":
-                train_total_loss_name = "train_total_l2_loss"
-            elif self.config.COMBINE_LOSS == "Cosine Similarity":
-                train_total_loss_name = "train_total_cos_similarity"
-
-            self.log(
-                train_total_loss_name,
-                total_combine_loss,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=True,
-            )
-
-            if self.config.OPERATOR == "Sub":
-                total_loss -= self.config.LOSS_WEIGHT * total_combine_loss
-            else:
-                total_loss += self.config.LOSS_WEIGHT * total_combine_loss
-
-        self.log(
-            "train_total_mask_loss",
-            total_mask_loss,
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
-        )
 
         self.log(
             "train_total_loss",
@@ -431,18 +500,103 @@ class SAMRoadplus(pl.LightningModule):
             batch["valid"],
         )
         # masks: [B, H, W, 2] topo: [B, N_samples, N_pairs, 1]
-        mask_logits_list, mask_scores_list = self(rgb, graph_points, pairs, valid)
+        (
+            mask_logits_list,
+            mask_scores_list,
+            mask_road_vars_list,
+            mask_keypoint_vars_list,
+        ) = self(rgb, graph_points, pairs, valid)
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
         mask_loss_list = []
         for i, logits in enumerate(mask_logits_list):
             if self.config.ALEATORIC:
-                new_logits = logits[..., :2]
-                uncertainty = logits[..., 2].unsqueeze(-1)
+                # logit 구분
+                # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
+                # B, H, W
+                road_logits = logits[..., 1]
+                keypoint_logits = logits[..., 0]
 
-                tmp_mask_loss = self.mask_criterion(new_logits, gt_masks)
-                tmp_loss = tmp_mask_loss * torch.exp(-uncertainty) + uncertainty
-                mask_loss = tmp_loss.mean()
+                # B, H, W
+                road_vars = mask_road_vars_list[i].squeeze(-1)
+                keypoint_vars = mask_keypoint_vars_list[i].squeeze(-1)
+
+                # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
+                # B, H, W
+                road_sigma = torch.sqrt(torch.exp(road_vars))
+                keypoint_sigma = torch.sqrt(torch.exp(keypoint_vars))
+
+                # 정규 분포에서 샘플링
+                # [T, B, H, W]
+                road_epsilon = torch.randn(
+                    self.config.MC_SAMPLING, *road_sigma.shape, device=road_sigma.device
+                )
+                keypoint_epsilon = torch.randn(
+                    self.config.MC_SAMPLING,
+                    *keypoint_sigma.shape,
+                    device=keypoint_sigma.device,
+                )
+
+                # MC Sampling을 위한 브로드캐스팅 준비
+                # 1, B, H, W
+                road_logits = road_logits.unsqueeze(0)
+                keypoint_logits = keypoint_logits.unsqueeze(0)
+                road_sigma = road_sigma.unsqueeze(0)
+                keypoint_sigma = keypoint_sigma.unsqueeze(0)
+
+                # T, B, H, W
+                road_x_hat = road_logits + road_sigma * road_epsilon
+                keypoint_x_hat = keypoint_logits + keypoint_sigma * keypoint_epsilon
+
+                # T, B, H, W
+                # loss에서 브로드캐스팅 되나..?
+                gt_road_repeat = road_mask[None, ...].repeat(
+                    *([self.config.MC_SAMPLING] + [1 for _ in range(road_mask.ndim)])
+                )
+                gt_keypoint_repeat = keypoint_mask[None, ...].repeat(
+                    *(
+                        [self.config.MC_SAMPLING]
+                        + [1 for _ in range(keypoint_mask.ndim)]
+                    )
+                )
+
+                loss_road_mc = self.mask_criterion(road_x_hat, gt_road_repeat)
+                loss_keypoint_mc = self.mask_criterion(
+                    keypoint_x_hat, gt_keypoint_repeat
+                )
+
+                mask_road_loss = loss_road_mc.mean(dim=0).mean()
+                mask_keypoint_loss = loss_keypoint_mc.mean(dim=0).mean()
+
+                self.log(
+                    "val_road_mean_variance",
+                    torch.exp(road_vars).mean(),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+                self.log(
+                    "val_road_mean_std",
+                    torch.mean(road_sigma),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+                self.log(
+                    "val_keypoint_mean_variance",
+                    torch.exp(keypoint_vars).mean(),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+                self.log(
+                    "val_keypoint_mean_std",
+                    torch.mean(keypoint_sigma),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
+                mask_loss = (mask_road_loss + mask_keypoint_loss) / 2.0
             else:
                 mask_loss = self.mask_criterion(logits, gt_masks)
 
@@ -450,137 +604,10 @@ class SAMRoadplus(pl.LightningModule):
                 print(f"NaN detected in mask_loss_{i}. Using default loss value.")
                 mask_loss = torch.tensor(0.0, device=mask_loss.device)
 
-            self.log(
-                f"val_mask_loss_{i}",
-                mask_loss,
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-            )
-
             mask_loss_list.append(mask_loss)
 
         total_mask_loss = torch.stack(mask_loss_list).mean()
         total_loss = total_mask_loss
-
-        if self.config.COMBINE_LOSS:
-            combine_loss_list = []
-            for i in range(self.config.DECODER_COUNT):  # Decoder 순으로 pair 구성
-                for j in range(i + 1, self.config.DECODER_COUNT):
-                    if self.config.COMBINE_LOSS == "KLDivLoss":
-                        log_p = F.log_softmax(mask_logits_list[i], dim=-1)
-                        q = F.softmax(mask_logits_list[j], dim=-1)
-
-                        combine_loss = self.kl_div_criterion(log_p, q)
-                        log_name = f"val_kl_div_loss_{i}_{j}"
-
-                    elif self.config.COMBINE_LOSS == "L2 Loss":
-                        if self.config.LOGITS_NORMALIZATION:  # normalization 적용
-                            f1_mean = mask_logits_list[i].mean(dim=(1, 2), keepdim=True)
-                            f1_std = mask_logits_list[i].std(dim=(1, 2), keepdim=True)
-                            f1 = (mask_logits_list[i] - f1_mean) / (f1_std + 1e-8)
-
-                            f2_mean = mask_logits_list[j].mean(dim=(1, 2), keepdim=True)
-                            f2_std = mask_logits_list[j].std(dim=(1, 2), keepdim=True)
-                            f2 = (mask_logits_list[j] - f2_mean) / (f2_std + 1e-8)
-                            combine_loss = ((f1 - f2) ** 2).mean()
-                        else:
-                            f1, f2 = mask_scores_list[i], mask_scores_list[j]
-
-                            keypoint_l2_loss = ((f1[..., 0] - f2[..., 0]) ** 2).mean()
-                            road_l2_loss = ((f1[..., 1] - f2[..., 1]) ** 2).mean()
-                            combine_loss = (keypoint_l2_loss + road_l2_loss) / 2
-
-                            self.log(
-                                f"val_keypoint_l2_loss_{i}_{j}",
-                                keypoint_l2_loss,
-                                on_step=False,
-                                on_epoch=True,
-                                prog_bar=True,
-                            )
-
-                            self.log(
-                                f"val_road_l2_loss_{i}_{j}",
-                                road_l2_loss,
-                                on_step=False,
-                                on_epoch=True,
-                                prog_bar=True,
-                            )
-
-                        log_name = f"val_l2_loss_{i}_{j}"
-
-                    elif self.config.COMBINE_LOSS == "Cosine Similarity":
-                        f1, f2 = mask_logits_list[i], mask_logits_list[j]
-
-                        f1_keypoint = F.normalize(f1[..., 0].flatten(1), dim=1)
-                        f2_keypoint = F.normalize(f2[..., 0].flatten(1), dim=1)
-
-                        f1_road = F.normalize(f1[..., 1].flatten(1), dim=1)
-                        f2_road = F.normalize(f2[..., 1].flatten(1), dim=1)
-
-                        keypoint_cos_similarity = (
-                            (f1_keypoint * f2_keypoint).sum(dim=1).mean()
-                        )
-                        road_cos_similarity = (f1_road * f2_road).sum(dim=1).mean()
-
-                        combine_loss = (
-                            keypoint_cos_similarity + road_cos_similarity
-                        ) / 2
-                        log_name = f"val_cos_similarity_{i}_{j}"
-
-                        self.log(
-                            f"val_keypoint_cos_similarity_{i}_{j}",
-                            keypoint_cos_similarity,
-                            on_step=False,
-                            on_epoch=True,
-                            prog_bar=True,
-                        )
-
-                        self.log(
-                            f"val_road_cos_similarity_{i}_{j}",
-                            road_cos_similarity,
-                            on_step=False,
-                            on_epoch=True,
-                            prog_bar=True,
-                        )
-
-                    self.log(
-                        log_name,
-                        combine_loss,
-                        on_step=False,
-                        on_epoch=True,
-                        prog_bar=True,
-                    )
-                    combine_loss_list.append(combine_loss)
-
-            total_combine_loss = torch.stack(combine_loss_list).mean()
-            if self.config.COMBINE_LOSS == "KLDivLoss":
-                val_total_loss_name = "val_total_kl_div_loss"
-            elif self.config.COMBINE_LOSS == "L2 Loss":
-                val_total_loss_name = "val_total_l2_loss"
-            elif self.config.COMBINE_LOSS == "Cosine Similarity":
-                val_total_loss_name = "val_total_cos_similarity"
-
-            self.log(
-                val_total_loss_name,
-                total_combine_loss,
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-            )
-
-            if self.config.OPERATOR == "Sub":
-                total_loss -= self.config.LOSS_WEIGHT * total_combine_loss
-            else:
-                total_loss += self.config.LOSS_WEIGHT * total_combine_loss
-
-        self.log(
-            "val_total_mask_loss",
-            total_mask_loss,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-        )
 
         self.log(
             "val_total_loss",
@@ -619,17 +646,41 @@ class SAMRoadplus(pl.LightningModule):
                 *pred_road_names,
                 *pred_keypoint_names,
             ]
+
+            zip_list = [
+                viz_rgb,
+                viz_gt_keypoint,
+                viz_gt_road,
+                *viz_pred_road_list,
+                *viz_pred_keypoint_list,
+            ]
+
+            if self.config.ALEATORIC:
+                columns += ["road_variance_map", "keypoint_variance_map"]
+                viz_road_var_list, viz_keypoint_var_list = [], []
+                for road_mask_vars, keypoint_mask_vars in zip(
+                    mask_road_vars_list, mask_keypoint_vars_list
+                ):
+                    road_var_map = road_mask_vars[:max_viz_num, :, :, 0]
+                    keypoint_var_map = keypoint_mask_vars[:max_viz_num, :, :, 0]
+
+                    road_var_map = torch.exp(road_var_map)
+                    keypoint_var_map = torch.exp(keypoint_var_map)
+
+                    road_var_map = (road_var_map - road_var_map.min()) / (
+                        road_var_map.max() - road_var_map.min() + 1e-8
+                    )
+                    keypoint_var_map = (keypoint_var_map - keypoint_var_map.min()) / (
+                        keypoint_var_map.max() - keypoint_var_map.min() + 1e-8
+                    )
+                    viz_road_var_list.append(road_var_map)
+                    viz_keypoint_var_list.append(keypoint_var_map)
+                zip_list += viz_road_var_list
+                zip_list += viz_keypoint_var_list
+
             data = [
                 [wandb.Image(x.cpu().numpy()) for x in row]
-                for row in list(
-                    zip(
-                        viz_rgb,
-                        viz_gt_keypoint,
-                        viz_gt_road,
-                        *viz_pred_road_list,
-                        *viz_pred_keypoint_list,
-                    )
-                )
+                for row in list(zip(*zip_list))
             ]
             self.logger.log_table(key="viz_table", columns=columns, data=data)
 
@@ -742,7 +793,29 @@ class SAMRoadplus(pl.LightningModule):
                     "lr": self.config.BASE_LR,
                 }
             ]
+            road_var_decoder_params = [
+                {
+                    "params": [
+                        p
+                        for decoder in self.decoder_road_var_list
+                        for p in decoder.parameters()
+                    ],
+                    "lr": self.config.BASE_LR,
+                }
+            ]
+            keypoint_var_decoder_params = [
+                {
+                    "params": [
+                        p
+                        for decoder in self.decoder_keypoint_var_list
+                        for p in decoder.parameters()
+                    ],
+                    "lr": self.config.BASE_LR,
+                }
+            ]
         param_dicts += decoder_params
+        param_dicts += road_var_decoder_params
+        param_dicts += keypoint_var_decoder_params
 
         for i, param_dict in enumerate(param_dicts):
             param_num = sum([int(p.numel()) for p in param_dict["params"]])
