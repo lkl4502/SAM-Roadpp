@@ -7,7 +7,7 @@ from utils import load_config
 from model_probit import SAMRoadplus
 from dotenv import load_dotenv
 from argparse import ArgumentParser
-from dataset import SatMapDataset, graph_collate_fn
+from dataset_refactor import SatMapDataset, graph_collate_fn
 from torch.utils.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor

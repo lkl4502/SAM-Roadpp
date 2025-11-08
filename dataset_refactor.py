@@ -10,9 +10,42 @@ import numpy as np
 import os.path as osp
 
 from torch.utils.data import Dataset
+from concurrent.futures import ProcessPoolExecutor
 
 # import os
 # import addict
+
+
+def build_data(args):
+    (
+        idx,
+        config,
+        rgb_path,
+        keypoint_mask_path,
+        road_mask_path,
+        gt_graph_path,
+        coord_transform,
+    ) = args
+
+    rgb = read_rgb_img(rgb_path)
+    keypoint_mask = cv2.imread(keypoint_mask_path, cv2.IMREAD_GRAYSCALE)
+    road_mask = cv2.imread(road_mask_path, cv2.IMREAD_GRAYSCALE)
+    gt_graph_adj = pickle.load(open(gt_graph_path, "rb"))
+
+    if len(gt_graph_adj) == 0:
+        print(f"===== skipped empty tile {idx} =====")
+        return
+
+    graph_label_generator = GraphLabelGenerator(config, gt_graph_adj, coord_transform)
+    return rgb, keypoint_mask, road_mask, graph_label_generator
+
+
+def coord_transform_cityscale_globalscale(v):
+    return v[:, ::-1]
+
+
+def coord_transform_spacenet(v):
+    return np.stack([v[:, 1], 400 - v[:, 0]], axis=1)
 
 
 def read_rgb_img(path):
@@ -163,10 +196,11 @@ class GraphLabelGenerator:
 
         self.subdivide_points = np.array(self.full_graph_subdivide.vs["point"])
 
-        self.graph_rtee = rtree.index.Index()
-        for i, v in enumerate(self.subdivide_points):
-            x, y = v
-            self.graph_rtee.insert(i, (x, y, x, y))  # point 삽입
+        # multi-process rtree 생성시 문제 발생
+        # self.graph_rtee = rtree.index.Index()
+        # for i, v in enumerate(self.subdivide_points):
+        #     x, y = v
+        #     self.graph_rtee.insert(i, (x, y, x, y))  # point 삽입
 
         self.graph_kdtree = scipy.spatial.KDTree(self.subdivide_points)
 
@@ -204,11 +238,20 @@ class GraphLabelGenerator:
         self.sample_weights = np.full((point_num,), 0.1, dtype=np.float32)
         self.sample_weights[list(interesting_indices)] = 0.9
 
+    # multi-process rtree 생성시 sample_patch에서 호출하도록 변경
+    def _init_rtree(self):
+        self.graph_rtee = rtree.index.Index()
+        for i, v in enumerate(self.subdivide_points):
+            x, y = v
+            self.graph_rtee.insert(i, (x, y, x, y))  # point 삽입
+
     def sample_patch(self, patch, rot_index=0):
+        if not hasattr(self, "graph_rtee"):
+            self._init_rtree()
         (x0, y0), (x1, y1) = patch
         query_box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
-        # 전역 index에서 패치내에 존재하는 index들
+        # 전역 index에서 패치내에 존재하는 index
         patch_indices_all = set(self.graph_rtee.intersection(query_box))
         patch_indices = patch_indices_all - self.exclude_indices
 
@@ -307,6 +350,7 @@ class GraphLabelGenerator:
                 shall_connect.append(False)
                 valid.append(False)
             samples.append((pairs, shall_connect, valid))
+
         # Transform points
         # [N, 2]
         nmsed_points -= np.array([x0, y0])[np.newaxis, :]
@@ -380,123 +424,99 @@ class SatMapDataset(Dataset):
         dev_run=False,
     ):
         self.config = config
-        assert self.config.DATASET in {"cityscale", "globalscale", "spacenet"}
-        if self.config.DATASET == "cityscale":
-            self.IMAGE_SIZE = 2048
-            # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
-            self.SAMPLE_MARGIN = 64
-            rgb_pattern = osp.join(data_root, "cityscale/20cities/region_{}_sat.png")
+        self.is_train = is_train
+        self.data_root = data_root
+        self.dev_run = dev_run
+
+        name = self.config.DATASET.lower()
+        assert name in {"cityscale", "globalscale", "spacenet"}
+        if name == "cityscale":
+            base_path = osp.join(self.data_root, "cityscale")
+            self.IMAGE_SIZE, self.SAMPLE_MARGIN = 2048, 64
+            rgb_pattern = osp.join(base_path, "20cities/region_{}_sat.png")
             keypoint_mask_pattern = osp.join(
-                data_root, "cityscale/processed/keypoint_mask_{}.png"
+                base_path, "processed/keypoint_mask_{}.png"
             )
-            road_mask_pattern = osp.join(
-                data_root, "cityscale/processed/road_mask_{}.png"
-            )
+            road_mask_pattern = osp.join(base_path, "processed/road_mask_{}.png")
             gt_graph_pattern = osp.join(
-                data_root, "cityscale/20cities/region_{}_refine_gt_graph.p"
+                base_path, "20cities/region_{}_refine_gt_graph.p"
             )
 
             train, val, test = cityscale_data_partition()
 
             # coord-transform = (r, c) -> (x, y)
             # takes [N, 2] points
-            coord_transform = lambda v: v[:, ::-1]
+            coord_transform = coord_transform_cityscale_globalscale
 
-        # 경로 수정 필요
-        elif self.config.DATASET == "globalscale":
-            self.IMAGE_SIZE = 2048
-            # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
-            self.SAMPLE_MARGIN = 64
-            rgb_pattern = osp.join(
-                data_root, "Global-Scale/Global-Scale/train/region_{}_sat.png"
-            )
+        elif name == "globalscale":
+            self.IMAGE_SIZE, self.SAMPLE_MARGIN = 2048, 64
+            base_path = osp.join(self.data_root, "Global-Scale/Global-Scale")
+            rgb_pattern = osp.join(base_path, "train/region_{}_sat.png")
             keypoint_mask_pattern = osp.join(
-                data_root, "Global-Scale/Global-Scale/processed/keypoint_mask_{}.png"
+                base_path, "processed/keypoint_mask_{}.png"
             )
-            road_mask_pattern = osp.join(
-                data_root, "Global-Scale/Global-Scale/processed/road_mask_{}.png"
-            )
-            gt_graph_pattern = osp.join(
-                data_root, "Global-Scale/Global-Scale/train/region_{}_refine_gt_graph.p"
-            )
+            road_mask_pattern = osp.join(base_path, "processed/road_mask_{}.png")
+            gt_graph_pattern = osp.join(base_path, "train/region_{}_refine_gt_graph.p")
 
             train, val, test, test_out = globalscale_data_partition()
 
             # coord-transform = (r, c) -> (x, y)
             # takes [N, 2] points
-            coord_transform = lambda v: v[:, ::-1]
+            coord_transform = coord_transform_cityscale_globalscale
 
-        elif self.config.DATASET == "spacenet":
-            self.IMAGE_SIZE = 400
-            self.SAMPLE_MARGIN = 0
-            rgb_pattern = osp.join(data_root, "spacenet/RGB_1.0_meter/{}__rgb.png")
+        elif name == "spacenet":
+            self.IMAGE_SIZE, self.SAMPLE_MARGIN = 400, 0
+            base_path = osp.join(self.data_root, "spacenet")
+            rgb_pattern = osp.join(base_path, "RGB_1.0_meter/{}__rgb.png")
             keypoint_mask_pattern = osp.join(
-                data_root, "spacenet/processed/keypoint_mask_{}.png"
+                base_path, "processed/keypoint_mask_{}.png"
             )
-            road_mask_pattern = osp.join(
-                data_root, "spacenet/processed/road_mask_{}.png"
-            )
-            gt_graph_pattern = osp.join(
-                data_root, "spacenet/RGB_1.0_meter/{}__gt_graph.p"
-            )
+            road_mask_pattern = osp.join(base_path, "processed/road_mask_{}.png")
+            gt_graph_pattern = osp.join(base_path, "RGB_1.0_meter/{}__gt_graph.p")
 
             train, val, test = spacenet_data_partition()
 
             # coord-transform, (r, c) -> (x, y) 및 y축 반전
             # takes [N, 2] points
-            coord_transform = lambda v: np.stack([v[:, 1], 400 - v[:, 0]], axis=1)
+            coord_transform = coord_transform_spacenet
 
-        self.is_train = is_train
-
-        train_split = train + val
-        test_split = test
-        tile_indices = train_split if self.is_train else test_split
-
-        self.tile_indices = tile_indices
-
-        # rgb 이미지 리스트, 키포인트 마스크 리스트, 도로 마스크 리스트
-        self.rgbs, self.keypoint_masks, self.road_masks = [], [], []
-        # For graph label generation.
-        self.graph_label_generators = []
+        self.tile_indices = train + val if self.is_train else test
 
         ##### FAST DEBUG
         if dev_run:
-            tile_indices = tile_indices[:4]
+            self.tile_indices = self.tile_indices[:4]
 
-        self.trainnum = tile_indices
-
-        for tile_idx in tile_indices:
-            print(f"loading tile {tile_idx}")
-            rgb_path = rgb_pattern.format(tile_idx)
-            road_mask_path = road_mask_pattern.format(tile_idx)
-            keypoint_mask_path = keypoint_mask_pattern.format(tile_idx)
-
-            # graph label gen
-            gt_graph_adj = pickle.load(open(gt_graph_pattern.format(tile_idx), "rb"))
-            if len(gt_graph_adj) == 0:
-                print(f"===== skipped empty tile {tile_idx} =====")
-                continue
-            self.rgbs.append(read_rgb_img(rgb_path))
-            self.road_masks.append(cv2.imread(road_mask_path, cv2.IMREAD_GRAYSCALE))
-            self.keypoint_masks.append(
-                cv2.imread(keypoint_mask_path, cv2.IMREAD_GRAYSCALE)
+        gt_graph_args_list = [
+            (
+                idx,
+                config,
+                rgb_pattern.format(idx),
+                keypoint_mask_pattern.format(idx),
+                road_mask_pattern.format(idx),
+                gt_graph_pattern.format(idx),
+                coord_transform,
             )
-            graph_label_generator = GraphLabelGenerator(
-                config, gt_graph_adj, coord_transform
-            )
-            self.graph_label_generators.append(graph_label_generator)
+            for idx in self.tile_indices
+        ]
 
         self.sample_min = self.SAMPLE_MARGIN
         self.sample_max = self.IMAGE_SIZE - (
             self.config.PATCH_SIZE + self.SAMPLE_MARGIN
         )  # 이미지 경계에서 margin 떨어진 곳까지만 샘플링
 
+        with ProcessPoolExecutor(max_workers=self.config.USING_CPU) as executor:
+            result = list(executor.map(build_data, gt_graph_args_list))
+
+        self.rgbs, self.keypoint_masks, self.road_masks, self.graph_label_generators = (
+            map(list, zip(*result))
+        )
+
         if not self.is_train:  # 평가시에는 랜덤 샘플링이 아니라 순서대로 수행
             eval_patches_per_edge = math.ceil(
                 (self.IMAGE_SIZE - 2 * self.SAMPLE_MARGIN) / self.config.PATCH_SIZE
             )
             self.eval_patches = []
-            for i in range(len(tile_indices)):
+            for i in range(len(self.tile_indices)):
                 self.eval_patches += get_patch_info_one_img(
                     i,
                     self.IMAGE_SIZE,
@@ -514,20 +534,21 @@ class SatMapDataset(Dataset):
                 num_patches_per_image = (
                     max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2
                 )  # SAMRoad에서는 4 ** 2 * 2500 -> 4만번
-                return len(self.trainnum) * num_patches_per_image
+                return len(self.tile_indices) * num_patches_per_image
             elif self.config.DATASET == "spacenet":
                 num_patches_per_image = (
                     max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2
                 )
                 return (
-                    len(self.trainnum) * num_patches_per_image
+                    len(self.tile_indices) * num_patches_per_image
                 )  # SAMRoad에서는 84667 하드코딩
         else:
             return len(self.eval_patches)
 
     def __getitem__(self, idx):
         if self.is_train:
-            img_idx = np.random.randint(low=0, high=len(self.rgbs))
+            # NOTE 도대체 왜 랜덤으로 뽑는지 모르겠음
+            img_idx = np.random.randint(low=0, high=len(self.tile_indices))
             begin_x = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
             begin_y = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
             end_x, end_y = (
@@ -553,6 +574,7 @@ class SatMapDataset(Dataset):
         # Sample graph labels from patch
         patch = ((begin_x, begin_y), (end_x, end_y))
         # points are img (x, y) inside the patch.
+
         graph_points, topo_samples = self.graph_label_generators[img_idx].sample_patch(
             patch, rot_index
         )

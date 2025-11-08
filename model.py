@@ -320,7 +320,6 @@ class TopoNet(nn.Module):
         # pairs: [B, N_samples, N_pairs, 2]
         # pairs_valid: [B, N_samples, N_pairs]
         # mask scores:[B, 2, 512, 512]
-        B, _, H, W = mask_scores.shape
 
         # 설정 차원으로 변환 -> 이후 비교/조합에 용이
         point_features = F.relu(self.feature_proj(point_features))
@@ -375,9 +374,8 @@ class TopoNet(nn.Module):
 
         # 모든 pair가 invalid한 행의 원소를 valid하게 변경 -> Transformer 연산에서 Nan값 방지
         pairs_valid = torch.logical_or(pairs_valid, all_invalid_pair_mask)
-        padding_mask = (
-            ~pairs_valid
-        )  # bool 반전, True -> valid, False -> padding 즉, 무시
+        # bool 반전, True -> valid, False -> padding 즉, 무시
+        padding_mask = ~pairs_valid
 
         if self.config.TOPONET_VERSION != "no_transformer":
             pair_features = self.transformer_encoder(
@@ -386,6 +384,7 @@ class TopoNet(nn.Module):
 
         _, n_pairs, _ = pair_features.shape
         pair_features = pair_features.view(batch_size, n_samples, n_pairs, -1)
+
         # [B, N_samples, N_pairs, 1]
         logits = self.output_proj(pair_features)
         scores = torch.sigmoid(logits)
@@ -626,8 +625,8 @@ class SAMRoadplus(pl.LightningModule):
                     state_dict_to_load[k] = ckpt_state_dict[k]
                 else:
                     mismatch_names.append(k)
-            print("###### Matched params ######")
-            pprint.pprint(matched_names)
+            # print("###### Matched params ######")
+            # pprint.pprint(matched_names)
             print("###### Mismatched params ######")
             pprint.pprint(mismatch_names)
 
@@ -823,8 +822,8 @@ class SAMRoadplus(pl.LightningModule):
                         viz_rgb,
                         viz_gt_keypoint,
                         viz_gt_road,
-                        viz_pred_road,
                         viz_pred_keypoint,
+                        viz_pred_road,
                     )
                 )
             ]
