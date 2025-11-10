@@ -258,8 +258,6 @@ class GraphLabelGenerator:
         # Use NMS to downsample, params shall resemble inference time
         patch_indices = np.array(list(patch_indices))
         if len(patch_indices) == 0:
-            # print("==== Patch is empty ====")
-            # this shall be rare, but if no points in side the patch, return null stuff
             sample_num = self.config.TOPO_SAMPLE_NUM
             max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES
             fake_points = np.array([[0.0, 0.0]], dtype=np.float32)
