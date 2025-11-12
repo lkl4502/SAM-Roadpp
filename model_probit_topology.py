@@ -267,7 +267,6 @@ class BilinearSampler(nn.Module):
             feature_maps, sample_points, mode="bilinear", align_corners=False
         )
         sampled_features_source = sampled_features_o.squeeze(dim=-1).permute(0, 2, 1)
-
         return sampled_features_target, point, sampled_features_source
 
 
@@ -500,9 +499,6 @@ class SAMRoadplus(pl.LightningModule):
         self.keypoint_iou = BinaryJaccardIndex(threshold=0.5)
         self.road_iou = BinaryJaccardIndex(threshold=0.5)
 
-        if self.config.ALEATORIC:
-            self.keypoint_probit_iou = BinaryJaccardIndex(threshold=0.5)
-            self.road_probit_iou = BinaryJaccardIndex(threshold=0.5)
         self.topo_f1 = F1Score(task="binary", threshold=0.5, ignore_index=-1)
 
         # testing only, not used in training
@@ -630,11 +626,14 @@ class SAMRoadplus(pl.LightningModule):
                 keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
                 road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
 
-                # B, H, W
-                keypoint_probit = torch.sigmoid(keypoint_logits / keypoint_denominator)
-                road_probit = torch.sigmoid(road_logits / road_denominator)
+                keypoint_logits /= keypoint_denominator
+                road_logits /= road_denominator
 
-                mask_scores = torch.cat([keypoint_probit, road_probit], dim=1)
+                keypoint_score = torch.sigmoid(keypoint_logits)
+                road_score = torch.sigmoid(road_logits)
+
+                mask_logits = torch.cat([keypoint_logits, road_logits], dim=1)
+                mask_scores = torch.cat([keypoint_score, road_score], dim=1)
             else:
                 mask_scores = torch.sigmoid(mask_logits)
         # image embedding + mask를 통해 graph points 주변 feature 샘플링
@@ -696,27 +695,9 @@ class SAMRoadplus(pl.LightningModule):
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
         if self.config.ALEATORIC:
-            # logit 구분
-            # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
             # B, H, W
-            keypoint_logits = mask_logits[..., 0]
-            road_logits = mask_logits[..., 1]
-
-            # B, H, W
-            keypoint_log_var = mask_keypoint_vars.squeeze(-1)
-            road_log_var = mask_road_vars.squeeze(-1)
-
-            # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
-            # B, H, W
-            keypoint_var = self._compute_var(keypoint_log_var)
-            road_var = self._compute_var(road_log_var)
-
-            keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
-            road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
-
-            # B, H, W
-            keypoint_probit = keypoint_logits / keypoint_denominator
-            road_probit = road_logits / road_denominator
+            keypoint_probit = mask_logits[..., 0]
+            road_probit = mask_logits[..., 1]
 
             keypoint_probit_loss = self.mask_criterion(
                 keypoint_probit, keypoint_mask
@@ -802,24 +783,8 @@ class SAMRoadplus(pl.LightningModule):
             # logit 구분
             # 한 번에 처리 가능하지만 명시적 구분을 위해 나누어서 구현
             # B, H, W
-            keypoint_logits = mask_logits[..., 0]
-            road_logits = mask_logits[..., 1]
-
-            # B, H, W
-            keypoint_log_var = mask_keypoint_vars.squeeze(-1)
-            road_log_var = mask_road_vars.squeeze(-1)
-
-            # var 는 log(sigma^2) --> sigma는 sqrt(exp(var))
-            # B, H, W
-            keypoint_var = self._compute_var(keypoint_log_var)
-            road_var = self._compute_var(road_log_var)
-
-            keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
-            road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
-
-            # B, H, W
-            keypoint_probit = keypoint_logits / keypoint_denominator
-            road_probit = road_logits / road_denominator
+            keypoint_probit = mask_logits[..., 0]
+            road_probit = mask_logits[..., 1]
 
             keypoint_probit_loss = self.mask_criterion(
                 keypoint_probit, keypoint_mask
@@ -923,12 +888,6 @@ class SAMRoadplus(pl.LightningModule):
         road_mask = (road_mask > 0.5).float()
         self.keypoint_iou.update(mask_scores[..., 0], keypoint_mask)
         self.road_iou.update(mask_scores[..., 1], road_mask)
-
-        if self.config.ALEATORIC:
-            self.keypoint_probit_iou.update(
-                torch.sigmoid(mask_logits[..., 0]), keypoint_mask
-            )
-            self.road_probit_iou.update(torch.sigmoid(mask_logits[..., 1]), road_mask)
         valid = valid.to(torch.int32)
         topo_gt = (1 - valid) * -1 + valid * topo_gt
         self.topo_f1.update(topo_scores, topo_gt.unsqueeze(-1))
@@ -937,15 +896,6 @@ class SAMRoadplus(pl.LightningModule):
         keypoint_iou = self.keypoint_iou.compute()
         road_iou = self.road_iou.compute()
         topo_f1 = self.topo_f1.compute()
-
-        if self.config.ALEATORIC:
-            keypoint_probit_iou = self.keypoint_probit_iou.compute()
-            road_probit_iou = self.road_probit_iou.compute()
-            self.log("keypoint_probit_iou", keypoint_probit_iou)
-            self.log("road_probit_iou", road_probit_iou)
-            self.keypoint_probit_iou.reset()
-            self.road_probit_iou.reset()
-
         self.log("keypoint_iou", keypoint_iou)
         self.log("road_iou", road_iou)
         self.log("topo_f1", topo_f1)

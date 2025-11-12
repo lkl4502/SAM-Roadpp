@@ -110,7 +110,7 @@ def infer_one_img(net, img, config):
             )
             print(f"mask_scores mean: {mask_scores.mean():.4f}")
 
-            mask_scores11 = mask_scores.permute(0, 3, 1, 2)  # (0,3,1,2)
+            mask_scores11 = mask_scores.permute(0, 3, 1, 2)  # (B, 2, H, W)
 
             img_mask.append(mask_scores11)
         # Aggregate masks

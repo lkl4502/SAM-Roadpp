@@ -1,26 +1,24 @@
-import torch
-import torch.nn.functional as F
-from torch import nn
-import matplotlib.pyplot as plt
 import math
-import copy
+import torch
+import pprint
+import vitdet
+import torchvision
+import numpy as np
+import lightning.pytorch as pl
+import torch.nn.functional as F
+
+from torch import nn
 from functools import partial
 from torchmetrics.classification import (
     BinaryJaccardIndex,
     F1Score,
     BinaryPrecisionRecallCurve,
 )
-import lightning.pytorch as pl
-from segment_anything.modeling.image_encoder import ImageEncoderViT
-from segment_anything.modeling.mask_decoder import MaskDecoder
-from segment_anything.modeling.prompt_encoder import PromptEncoder
-from segment_anything.modeling.transformer import TwoWayTransformer
 from segment_anything.modeling.common import LayerNorm2d
-import numpy as np
-import wandb
-import pprint
-import torchvision
-import vitdet
+from segment_anything.modeling.transformer import TwoWayTransformer
+from segment_anything.modeling.mask_decoder import MaskDecoder
+from segment_anything.modeling.image_encoder import ImageEncoderViT
+from segment_anything.modeling.prompt_encoder import PromptEncoder
 
 
 class BilinearSampler(nn.Module):
@@ -132,9 +130,8 @@ def extendline(points1, points2, image):
 
     features1 = image[np.arange(B)[:, None, None], x_final_1, y_final_1]
     features = image[np.arange(B)[:, None, None], x_final, y_final]
-    features2 = image[
-        np.arange(B)[:, None, None], x_final_2, y_final_2
-    ]  # extract mask feature
+    features2 = image[np.arange(B)[:, None, None], x_final_2, y_final_2]
+
     features = torch.concat([features1, features, features2], dim=2)
 
     return features

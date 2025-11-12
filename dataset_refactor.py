@@ -289,7 +289,9 @@ class GraphLabelGenerator:
         nmsed_point_num = nmsed_points.shape[0]
 
         sample_num = self.config.TOPO_SAMPLE_NUM  # 128 or 512
-        sample_weights = self.sample_weights[nmsed_indices]  # 교차점은 0.9 나머지 0.1
+        sample_weights = self.sample_weights[
+            nmsed_indices
+        ]  # 교차점과 cross over 인근은 0.9 나머지 0.1
 
         # indices into the nmsed points in the patch
         sample_indices_in_nmsed = np.random.choice(
@@ -399,6 +401,7 @@ def graph_collate_fn(batch):
             tensors = [item[key] for item in batch]
             # 최대 포인트 개수 계산 (동일 크기로 패딩 목적)
             max_point_num = max([x.shape[0] for x in tensors])
+
             padded = []
             for x in tensors:
                 pad_num = max_point_num - x.shape[0]
