@@ -361,7 +361,7 @@ class GraphLabelGenerator:
             axis=1,
         )
         trans = np.array(
-            [
+            [  # 회전 전에 원점을 패치 중심으로 이동
                 [1, 0, -0.5 * self.config.PATCH_SIZE],
                 [0, 1, -0.5 * self.config.PATCH_SIZE],
                 [0, 0, 1],
@@ -370,7 +370,7 @@ class GraphLabelGenerator:
         )
         # ccw 90 deg in img (x, y)
         rot = np.array(
-            [
+            [  # 90도 반시계 회전 행렬, rot_index 0, 1, 2, 3에 따라 회전 각 결정
                 [0, 1, 0],
                 [-1, 0, 0],
                 [0, 0, 1],
@@ -381,7 +381,7 @@ class GraphLabelGenerator:
             nmsed_points
             @ trans.T
             @ np.linalg.matrix_power(rot.T, rot_index)
-            @ np.linalg.inv(trans.T)
+            @ np.linalg.inv(trans.T)  # 중심 이동 좌표 복귀
         )
         nmsed_points = nmsed_points[:, :2]
         return nmsed_points, samples
