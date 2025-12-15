@@ -45,7 +45,7 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "SoftPlus offset 0.1, weight 0.9 - Full Training"
+WANDB_EXPERIMENT_NAME: "baseline 1e-1"
 
 # Decoder 간 거리 조정
 COMBINE_LOSS: False

@@ -1,27 +1,27 @@
-import numpy as np
 import os
-import imageio
-import torch
 import cv2
-import re
+import time
+import rtree
+import torch
+import scipy
+import pickle
+import triage
+import graph_utils
+import numpy as np
+import os.path as osp
+import graph_extraction
+
 from utils import load_config, create_output_dir_and_save_config
-from dataset import read_rgb_img, get_patch_info_one_img
-from dataset import (
+from dataset_refactor import read_rgb_img, get_patch_info_one_img
+from dataset_refactor import (
     spacenet_data_partition,
     cityscale_data_partition,
     globalscale_data_partition,
 )
-from modelinfer import SAMRoadplus
-import graph_extraction
-import graph_utils
-import triage
-import pickle
-import scipy
-import rtree
-from collections import defaultdict
-import time
-import os
 from argparse import ArgumentParser
+from modelinfer import SAMRoadplus as OriginSAMRoadplus
+from probit_modelinfer import SAMRoadplus as ProbitSAMRoadplus
+from collections import defaultdict
 
 
 parser = ArgumentParser()
@@ -32,7 +32,9 @@ parser.add_argument(
     default="",
     help="Name of the output dir, if not specified will use timestamp",
 )
+parser.add_argument("--data_root", default="/home/work/data/RoadGraph")
 parser.add_argument("--device", default="cuda", help="device to use for training")
+parser.add_argument("--probit", default="False", action="store_true")
 args = parser.parse_args()
 
 
@@ -40,7 +42,7 @@ def get_img_paths(root_dir, image_indices):
     img_paths = []
 
     for ind in image_indices:
-        img_paths.append(os.path.join(root_dir, f"region_{ind}_sat.png"))
+        img_paths.append(osp.join(root_dir, f"region_{ind}_sat.png"))
     return img_paths
 
 
@@ -128,15 +130,6 @@ def infer_one_img(net, img, config):
 
     fused_keypoint_mask /= pixel_counter
     fused_road_mask /= pixel_counter
-
-    # 디버깅: 융합된 마스크 확인
-    print(f"Fused masks before scaling:")
-    print(
-        f"keypoint_mask range: [{fused_keypoint_mask.min():.4f}, {fused_keypoint_mask.max():.4f}]"
-    )
-    print(
-        f"road_mask range: [{fused_road_mask.min():.4f}, {fused_road_mask.max():.4f}]"
-    )
 
     # range 0-1 -> 0-255
     fused_keypoint_mask = (fused_keypoint_mask * 255).to(torch.uint8).cpu().numpy()
@@ -290,7 +283,8 @@ if __name__ == "__main__":
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    net = SAMRoadplus(config)
+
+    net = ProbitSAMRoadplus(config) if args.probit else OriginSAMRoadplus(config)
 
     # load checkpoint
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
@@ -301,9 +295,7 @@ if __name__ == "__main__":
 
     if config.DATASET == "cityscale":
         _, _, test_img_indices = cityscale_data_partition()
-        rgb_pattern = (
-            "/home/lkl4502/data/Aerial/RoadGraph/cityscale/20cities/region_{}_sat.png"
-        )
+        rgb_pattern = osp.join(args.data_root, "cityscale/20cities/region_{}_sat.png")
 
     elif config.DATASET == "globalscale_outdomain":
         _, _, _, test_img_indices = globalscale_data_partition()
@@ -315,17 +307,21 @@ if __name__ == "__main__":
 
     elif config.DATASET == "spacenet":
         _, _, test_img_indices = spacenet_data_partition()
-        rgb_pattern = (
-            "/home/lkl4502/data/Aerial/RoadGraph/spacenet/RGB_1.0_meter/{}__rgb.png"
-        )
+        rgb_pattern = osp.joint(args.data_root, "spacenet/RGB_1.0_meter/{}__rgb.png")
 
     output_dir_prefix = "./save/infer_"
-    if args.output_dir:
-        output_dir = create_output_dir_and_save_config(
-            output_dir_prefix, config, specified_dir=f"./save/{args.output_dir}"
-        )
-    else:
-        output_dir = create_output_dir_and_save_config(output_dir_prefix, config)
+    # if args.output_dir:
+    #     output_dir = create_output_dir_and_save_config(
+    #         output_dir_prefix,
+    #         config,
+    #         specified_dir=f"./outputs/{config.WANDB_PROJECT_NAME}/{config.WANDB_EXPERIMENT_NAME}/save",
+    #     )
+    # else:
+    output_dir = create_output_dir_and_save_config(
+        output_dir_prefix,
+        config,
+        specified_dir=f"./outputs/{config.WANDB_PROJECT_NAME}/{config.WANDB_EXPERIMENT_NAME}/save",
+    )
 
     total_inference_seconds = 0.0
 
@@ -344,19 +340,19 @@ if __name__ == "__main__":
         img_size = viz_img.shape[0]
 
         # visualizes fused masks
-        mask_save_dir = os.path.join(output_dir, "mask")
-        if not os.path.exists(mask_save_dir):
+        mask_save_dir = osp.join(output_dir, "mask")
+        if not osp.exists(mask_save_dir):
             os.makedirs(mask_save_dir)
-        cv2.imwrite(os.path.join(mask_save_dir, f"{img_id}_road.png"), road_mask)
-        cv2.imwrite(os.path.join(mask_save_dir, f"{img_id}_itsc.png"), itsc_mask)
+        cv2.imwrite(osp.join(mask_save_dir, f"{img_id}_road.png"), road_mask)
+        cv2.imwrite(osp.join(mask_save_dir, f"{img_id}_itsc.png"), itsc_mask)
 
-        viz_save_dir = os.path.join(output_dir, "viz")
-        if not os.path.exists(viz_save_dir):
+        viz_save_dir = osp.join(output_dir, "viz")
+        if not osp.exists(viz_save_dir):
             os.makedirs(viz_save_dir)
         viz_img = triage.visualize_image_and_graph(
             viz_img, pred_nodes / img_size, pred_edges, viz_img.shape[0]
         )
-        cv2.imwrite(os.path.join(viz_save_dir, f"{img_id}.png"), viz_img)
+        cv2.imwrite(osp.join(viz_save_dir, f"{img_id}.png"), viz_img)
 
         # Saves the large map
         if config.DATASET == "spacenet":
@@ -365,10 +361,10 @@ if __name__ == "__main__":
         large_map_sat2graph_format = graph_utils.convert_to_sat2graph_format(
             pred_nodes, pred_edges
         )
-        graph_save_dir = os.path.join(output_dir, "graph")
-        if not os.path.exists(graph_save_dir):
+        graph_save_dir = osp.join(output_dir, "graph")
+        if not osp.exists(graph_save_dir):
             os.makedirs(graph_save_dir)
-        graph_save_path = os.path.join(graph_save_dir, f"{img_id}.p")
+        graph_save_path = osp.join(graph_save_dir, f"{img_id}.p")
         with open(graph_save_path, "wb") as file:
             pickle.dump(large_map_sat2graph_format, file)
 
@@ -379,5 +375,5 @@ if __name__ == "__main__":
         f"Inference completed for {args.config} in {total_inference_seconds} seconds."
     )
     print(time_txt)
-    with open(os.path.join(output_dir, "inference_time.txt"), "w") as f:
+    with open(osp.join(output_dir, "inference_time.txt"), "w") as f:
         f.write(time_txt)

@@ -45,7 +45,7 @@ MAX_NEIGHBOR_QUERIES: 16
 # Wandb
 WANDB_TEAM_NAME: "lkl4502-kookmin-university"
 WANDB_PROJECT_NAME: "Road Graph Extraction City-Scale"
-WANDB_EXPERIMENT_NAME: "baseline 1e-2"
+WANDB_EXPERIMENT_NAME: "Using Prediction Mask - offset 1e-2, Sampling 2048"
 
 # Decoder 간 거리 조정
 COMBINE_LOSS: False
@@ -55,12 +55,13 @@ LOSS_WEIGHT: 0.1
 DECODER_COUNT: 1
 ALEATORIC: True
 USING_CPU: 16
+SAMPLING_NODE_NUM: 2048
 # MC_SAMPLING: 50
 
 # 하한 조정
 OFFSET: 0.01
-SOFTPLUS: True
 POSITIVE_SCALE: 0.9
+SOFTPLUS: True
 
 # 시각화 image index
 VIZ_IDX: 15 # 108 image

@@ -47,9 +47,11 @@ def find_highest_mask_point(x, y, mask, device="cuda"):
 
     # 좌표 범위 설정 (반경 내에서만 탐색)
     x_min = max(0, x - radius)
-    x_max = min(H, x + radius)
+    # x_max = min(H, x + radius)
+    x_max = min(H, x + radius + 1)  # ??? +1을 해야지 반경 2픽셀 아닌가?
     y_min = max(0, y - radius)
-    y_max = min(W, y + radius)
+    # y_max = min(W, y + radius)
+    y_max = min(W, y + radius + 1)  # ??? +1을 해야지 반경 2픽셀 아닌가?
 
     # 탐색 범위 내 mask 영역 추출, device에 할당
     mask_region = mask[:, x_min:x_max, y_min:y_max].to(device)
@@ -79,7 +81,7 @@ def find_highest_mask_point(x, y, mask, device="cuda"):
     if mask_scores.numel() > 0:
         mask_max = torch.max(mask_scores)  # 최대값 찾기
         max_pos = torch.nonzero(mask_scores == mask_max)  # 최대값 위치 추출
-        if len(max_pos) > 0:
+        if len(max_pos) > 0:  # 좌표 복원
             x_final = max_pos[0][0] + x_min  # mask_region이 일부 영역 추출이므로
             y_final = max_pos[0][1] + y_min  # x, y의 min값 더해줌``
         else:
@@ -218,8 +220,8 @@ def extendline(points1, points2, image):
     return features
 
 
-class BilinearSampler(nn.Module):
-    def __init__(self, config):
+class BilinearSampler(nn.Module):  # Node-guided Resampling
+    def __init__(self, config):  # Extract Node-Centered Patch
         super(BilinearSampler, self).__init__()
         self.config = config
 
@@ -611,6 +613,7 @@ class SAMRoadplus(pl.LightningModule):
         return sorted_points[kept]
 
     def _extract_graph_points_torch(self, mask_scores):  # B, 2, H, W
+        # 회전에 대한 것은 상관 X
         permute_mask_scores = mask_scores.permute(0, 2, 3, 1)  # B, H, W, 2
         keypoint_mask = permute_mask_scores[..., 0]
         road_mask = permute_mask_scores[..., 1]
@@ -633,23 +636,16 @@ class SAMRoadplus(pl.LightningModule):
             rd_score = road_mask[bi, rd_y, rd_x]  # N_1,
 
             # NOTE 학습 초기 node 숫자 제한
-            initial_sample_num = self.config.SAMPLING_NODE_NUM
-            if kp_candidate.shape[0] > initial_sample_num:
-                # self.config.TOPO_SAMPLE_NUM:
+            if kp_candidate.shape[0] > self.config.TOPO_SAMPLE_NUM:
                 topk_scores, topk_indices = torch.topk(
-                    kp_score,
-                    k=initial_sample_num,
-                    # self.config.TOPO_SAMPLE_NUM
+                    kp_score, k=self.config.TOPO_SAMPLE_NUM
                 )
                 kp_candidate = kp_candidate[topk_indices]
                 kp_score = topk_scores
 
-            if rd_candidate.shape[0] > initial_sample_num:
-                # self.config.TOPO_SAMPLE_NUM:
+            if rd_candidate.shape[0] > self.config.TOPO_SAMPLE_NUM:
                 topk_scores, topk_indices = torch.topk(
-                    rd_score,
-                    k=initial_sample_num,
-                    # self.config.TOPO_SAMPLE_NUM
+                    rd_score, k=self.config.TOPO_SAMPLE_NUM
                 )
                 rd_candidate = rd_candidate[topk_indices]
                 rd_score = topk_scores
@@ -673,10 +669,6 @@ class SAMRoadplus(pl.LightningModule):
             node_coordinate = self._nms_points_torch(
                 node_candidate, node_score, self.config.ROAD_NMS_RADIUS
             )  # N, 2
-
-            if node_coordinate.shape[0] > self.config.TOPO_SAMPLE_NUM:
-                idx = torch.randperm(node_coordinate.shape[0], device=device)
-                node_coordinate = node_coordinate[idx[: self.config.TOPO_SAMPLE_NUM]]
 
             if node_coordinate.shape[0] == 0:
                 node_coordinate = torch.zeros((1, 2), device=device)

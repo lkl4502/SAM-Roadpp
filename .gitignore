@@ -33,6 +33,8 @@ lightning_logs/
 
 # bash 파일
 train*.bash
+total*.bash
+cpu_monitor.bash
 
 # txt 파일
 *.txt

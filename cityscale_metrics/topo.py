@@ -10,10 +10,10 @@ args = parser.parse_args()
 topo = []
 precision = []
 recall = []
-for file_name in os.listdir(f"{args.savedir}/results/topo"):
+for file_name in os.listdir(f"{args.savedir}/save/topo"):
     if ".txt" not in file_name:
         continue
-    with open(f"{args.savedir}/results/topo/{file_name}") as f:
+    with open(f"{args.savedir}/save/topo/{file_name}") as f:
         lines = f.readlines()
     p = float(lines[-1].split(" ")[0].split("=")[-1])
     r = float(lines[-1].split(" ")[-1].split("=")[-1])

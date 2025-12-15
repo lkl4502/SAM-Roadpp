@@ -79,7 +79,12 @@ if __name__ == "__main__":
     )
 
     checkpoint_callback = ModelCheckpoint(
-        every_n_epochs=1, save_top_k=3, monitor="val_total_loss", mode="min"
+        dirpath=f"outputs/{config.WANDB_PROJECT_NAME}/{config.WANDB_EXPERIMENT_NAME}",
+        filename="{epoch:02d}-{val_total_loss:.4f}",
+        every_n_epochs=1,
+        save_top_k=3,
+        monitor="val_total_loss",
+        mode="min",
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger()

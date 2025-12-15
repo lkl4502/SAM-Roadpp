@@ -205,6 +205,7 @@ class GraphLabelGenerator:
         self.graph_kdtree = scipy.spatial.KDTree(self.subdivide_points)
 
         # crossover 점들 학습 제외
+        # 서로 다른 도로가 공간상으로 겹치는 지점 ex ) 고가도로
         crossover_exclude_radius = 4
         exclude_indices = set()
         for p in self.crossover_points:
@@ -215,6 +216,7 @@ class GraphLabelGenerator:
         self.exclude_indices = exclude_indices
 
         # 교차로는 항상 학습에 중요하기 때문에 가중치 부여
+        # 연결된 edge가 있는 Node ex ) 사거리 ?
         itsc_indices = set()
         point_num = len(self.full_graph_subdivide.vs)
         for i in range(point_num):
