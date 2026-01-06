@@ -168,7 +168,7 @@ def variance_map_heatmap(config_path, ckpt_path, img_path, gt_path, output_name)
 
 
 # EMA variance map
-# ckpt_path = "/home/lkl4502/SAM-Roadpp/lightning_logs/8coq27xv/checkpoints/epoch=27-step=4032.ckpt"
+ckpt_path = "/home/work/model/SAM-Roadpp/outputs/Road Graph Extraction City-Scale/baseline 1e-2/epoch=29-val_total_loss=0.3249.ckpt"
 # config_path = (
 #     "/home/lkl4502/SAM-Roadpp/config/city-scale/toponet_vitb_512/EMA_0.9999.yaml"
 # )

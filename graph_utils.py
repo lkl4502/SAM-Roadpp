@@ -545,7 +545,7 @@ def find_crossover_points(graph):
     line_bboxes = [get_line_bbox(line) for line in lines]
     line_index = rtree.index.Index()
     for idx, bbox in enumerate(line_bboxes):
-        line_index.insert(idx, bbox)
+        line_index.insert(idx, bbox) # MBR (window 생성)
 
     crossover_points = []
     tested_pairs = set()

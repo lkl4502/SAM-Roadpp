@@ -26,6 +26,7 @@ runs/
 checkpoints/
 save/
 lightning_logs/
+*.ipynb
 
 # 환경 변수 파일
 .env

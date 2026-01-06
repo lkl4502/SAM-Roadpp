@@ -210,7 +210,7 @@ class GraphLabelGenerator:
         exclude_indices = set()
         for p in self.crossover_points:
             nearby_indices = self.graph_kdtree.query_ball_point(
-                p, crossover_exclude_radius
+                p, crossover_exclude_radius # nearby_indices에 p도 포함
             )
             exclude_indices.update(nearby_indices)
         self.exclude_indices = exclude_indices
@@ -232,7 +232,7 @@ class GraphLabelGenerator:
             p = self.subdivide_points[i]
             nearby_indices = self.graph_kdtree.query_ball_point(p, interesting_radius)
             interesting_indices.update(nearby_indices)
-        for p in self.crossover_points:
+        for p in self.crossover_points: # 탐색한 crossover point와 거리 4까지는 제외, 4 < r < 32 까지는 가중치
             nearby_indices = self.graph_kdtree.query_ball_point(
                 np.array(p), interesting_radius
             )

@@ -235,7 +235,7 @@ class BilinearSampler(nn.Module):
         B, D, H, W = feature_maps.shape  # [16, 256, H, W]
         batch_size, N_points, _ = sample_points.shape
 
-        target_new_points = torch.zeros_like(sample_points).cuda()
+        target_new_points = torch.zeros_like(sample_points)
         for batch_index in range(batch_size):
             for point_index in range(N_points):
                 x, y = sample_points[batch_index, point_index]

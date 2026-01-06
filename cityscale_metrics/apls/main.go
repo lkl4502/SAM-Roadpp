@@ -37,7 +37,7 @@ type graph struct {
 }
 
 func (g *graph) propagate(nid int, step int, action func(nid int)) {
-
+	// BFS로 그래프를 탐색하여, 하나의 GT노드에 여러 prop node가 매핑되는 것을 방지
 	visited := make(map[int]int)
 	var queue []int = []int{nid}
 
@@ -87,8 +87,6 @@ func GPSInBound(p1 [2]float64) bool {
 	} else {
 		return false
 	}
-
-	return false
 }
 
 type gpsnode struct {
@@ -276,6 +274,8 @@ func apls_one_way(graph_gt *graph, graph_prop *graph, ret chan float64) {
 				current_nid := next_nid
 
 				//fmt.Println("inloop")
+				// Degree가 2인 node를 따라 이동
+				// road가 나뉘어지거나 끝날때까지 따라감
 				for len(graph_gt.neighbors[current_nid]) == 2 {
 					var s int = 0
 					for k, _ := range graph_gt.neighbors[current_nid] {
@@ -291,7 +291,9 @@ func apls_one_way(graph_gt *graph, graph_prop *graph, ret chan float64) {
 				// city wide parameter: 37 50 meters 25.0
 				// spacenet : 15 20 meters 10.0
 
-				if len(chain) > interval_1 { // 50 meters
+				if len(chain) > interval_1 { // 50 meters, interval_1 은 37
+					// interval_2 는 25
+					// interval_1이 37인 이유는 n값이 무조건 3이상이 되게 하기 위함
 					n := int(float64(len(chain))/interval_2) + 1
 
 					for i := 1; i < n; i++ {
@@ -319,6 +321,9 @@ func apls_one_way(graph_gt *graph, graph_prop *graph, ret chan float64) {
 				}
 			}
 
+			// 탐색 시작점인 nid를 control point로 등록할지 말지를 결정
+			// node_cover_map_gt[nid] == false -> 교차로
+			// len(graph_gt.neighbors[nid]) == 1 -> 도로의 끝
 			if GPSInBound(graph_gt.Nodes[nid]) && (node_cover_map_gt[nid] == false || len(graph_gt.neighbors[nid]) == 1) {
 				lk := lockey(graph_gt.Nodes[nid], 2.0)
 				if _, ok := lockeys[lk]; !ok {
@@ -425,33 +430,6 @@ func apls_one_way(graph_gt *graph, graph_prop *graph, ret chan float64) {
 
 		if counter%100 == 0 {
 			fmt.Println("computing prop graph shortest paths ", counter, len(control_point_prop_list))
-
-			// if counter == 100 {
-			// 	fmt.Println("dump debug paths")
-			// 	for _, cp_prop2 := range control_point_prop_list {
-			// 		var trace [][2]float64
-			// 		current := cp_prop2
-
-			// 		for {
-			// 			if debug[current] < 0 {
-			// 				break
-			// 			}
-
-			// 			if debug[current] == current {
-			// 				break
-			// 			}
-
-			// 			trace = append(trace,graph_prop.Nodes[current])
-			// 			current = debug[current]
-			// 		}
-
-			// 		if len(trace)>0 {
-			// 			dat, _ := json.MarshalIndent(trace, "  ", "  ")
-			// 			_=ioutil.WriteFile(fmt.Sprintf("debug/trace%d.json", debugind), dat, 0644)
-			// 			debugind += 1
-			// 		}
-			// 	}
-			// }
 
 		}
 	}
@@ -650,7 +628,7 @@ func (g *graph) ShortestPaths(nid1 int, nid2 []int) (map[int]float64, map[int]in
 		cur_node_item := heap.Pop(&pq).(*NodeItem)
 		delete(queuemap, cur_node_item.nid)
 
-		if _, ok := result[cur_node_item.nid]; ok {
+		if _, ok := result[cur_node_item.nid]; ok { // value, ok -> value는 값, ok는 key 존재 여부
 			result[cur_node_item.nid] = float64(cur_node_item.distance) / 100.0
 		}
 
