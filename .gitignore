@@ -26,6 +26,7 @@ runs/
 checkpoints/
 save/
 lightning_logs/
+*.ipynb
 
 # 환경 변수 파일
 .env
@@ -33,6 +34,8 @@ lightning_logs/
 
 # bash 파일
 train*.bash
+total*.bash
+cpu_monitor.bash
 
 # txt 파일
 *.txt

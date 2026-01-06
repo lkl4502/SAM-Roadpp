@@ -4,7 +4,7 @@ import wandb
 import lightning.pytorch as pl
 
 from utils import load_config
-from model_probit import SAMRoadplus
+from model_prediction_mask_weight_sum import SAMRoadplus
 from dotenv import load_dotenv
 from argparse import ArgumentParser
 from dataset_refactor import SatMapDataset, graph_collate_fn

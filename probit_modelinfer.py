@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from torch import nn
 from functools import partial
+from navie_decoder import NaiveDecoder
 from torchmetrics.classification import (
     BinaryJaccardIndex,
     F1Score,
@@ -323,8 +324,8 @@ class SAMRoadplus(pl.LightningModule):
         image_size = config.PATCH_SIZE
         self.image_size = image_size
         vit_patch_size = 16
-        image_embedding_size = image_size // vit_patch_size
 
+        image_embedding_size = image_size // vit_patch_size
         encoder_output_dim = prompt_embed_dim
 
         self.register_buffer(
@@ -380,21 +381,14 @@ class SAMRoadplus(pl.LightningModule):
                 iou_head_hidden_dim=256,
             )
         else:
-            #### Naive decoder
-            activation = nn.GELU
-            self.map_decoder = nn.Sequential(
-                nn.ConvTranspose2d(encoder_output_dim, 128, kernel_size=2, stride=2),
-                LayerNorm2d(128),
-                activation(),
-                nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-                activation(),
-                nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
-                activation(),
-                nn.ConvTranspose2d(32, 2, kernel_size=2, stride=2),
-            )
+            self.mask_decoder = NaiveDecoder(out_channels=2)
+            self.keypoint_var_decoder = NaiveDecoder(out_channels=1)
+            self.road_var_decoder = NaiveDecoder(out_channels=1)
+
         #### TOPONet
         self.bilinear_sampler = BilinearSampler(config)
         self.topo_net = TopoNet(config, 256)
+
         #### LORA
         if config.ENCODER_LORA:
             r = self.config.LORA_RANK
@@ -441,14 +435,22 @@ class SAMRoadplus(pl.LightningModule):
                 nn.init.kaiming_uniform_(w_A.weight, a=math.sqrt(5))
             for w_B in self.w_Bs:
                 nn.init.zeros_(w_B.weight)
+
         #### Losses
         if self.config.FOCAL_LOSS:
             self.mask_criterion = partial(
                 torchvision.ops.sigmoid_focal_loss, reduction="mean"
             )
         else:
-            self.mask_criterion = torch.nn.BCEWithLogitsLoss()
+            reduction = "mean" if not self.config.ALEATORIC else "none"
+            self.mask_criterion = torch.nn.BCEWithLogitsLoss(reduction=reduction)
         self.topo_criterion = torch.nn.BCEWithLogitsLoss(reduction="none")
+
+        # probit approximation
+        self.register_buffer("probit_scale", torch.tensor(torch.pi**2 / 8), False)
+
+        # softplus
+        self.positive_transform = F.softplus if config.SOFTPLUS else torch.exp
 
         #### Metrics
         self.keypoint_iou = BinaryJaccardIndex(threshold=0.5)
@@ -528,6 +530,11 @@ class SAMRoadplus(pl.LightningModule):
                 new_state_dict[k] = rel_pos_params[0, 0, ...]
         return new_state_dict
 
+    def _compute_var(self, x):
+        return (
+            self.positive_transform(x) * self.config.POSITIVE_SCALE + self.config.OFFSET
+        )
+
     def forward(self, rgb, graph_points, pairs, valid):
         # rgb: [B, H, W, C]
         # graph_points: [B, N_points, 2]
@@ -558,8 +565,31 @@ class SAMRoadplus(pl.LightningModule):
             )
             mask_scores = torch.sigmoid(mask_logits)
         else:
-            mask_logits = self.map_decoder(image_embeddings)
-            mask_scores = torch.sigmoid(mask_logits)
+            mask_logits = self.mask_decoder(image_embeddings)
+            mask_keypoint_vars = self.keypoint_var_decoder(image_embeddings)
+            mask_road_vars = self.road_var_decoder(image_embeddings)
+
+            if self.config.ALEATORIC:
+                # B, 2, H, W
+                keypoint_logits = mask_logits[:, 0:1, :, :]  # B, 1, H, W
+                road_logits = mask_logits[:, 1:2, :, :]  # B, 1, H, W
+
+                keypoint_var = self._compute_var(mask_keypoint_vars)
+                road_var = self._compute_var(mask_road_vars)
+
+                keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
+                road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
+
+                keypoint_logits /= keypoint_denominator
+                road_logits /= road_denominator
+
+                keypoint_score = torch.sigmoid(keypoint_logits)
+                road_score = torch.sigmoid(road_logits)
+
+                mask_logits = torch.cat([keypoint_logits, road_logits], dim=1)
+                mask_scores = torch.cat([keypoint_score, road_score], dim=1)
+            else:
+                mask_scores = torch.sigmoid(mask_logits)
 
         ## Predicts local topology
         point_features = self.bilinear_sampler(image_embeddings, graph_points)
@@ -602,8 +632,31 @@ class SAMRoadplus(pl.LightningModule):
             )
             mask_scores = torch.sigmoid(mask_logits)
         else:
-            mask_logits = self.map_decoder(image_embeddings)
-            mask_scores = torch.sigmoid(mask_logits)
+            mask_logits = self.mask_decoder(image_embeddings)
+            mask_keypoint_vars = self.keypoint_var_decoder(image_embeddings)
+            mask_road_vars = self.road_var_decoder(image_embeddings)
+
+            if self.config.ALEATORIC:
+                # B, 2, H, W
+                keypoint_logits = mask_logits[:, 0:1, :, :]  # B, 1, H, W
+                road_logits = mask_logits[:, 1:2, :, :]  # B, 1, H, W
+
+                keypoint_var = self._compute_var(mask_keypoint_vars)
+                road_var = self._compute_var(mask_road_vars)
+
+                keypoint_denominator = torch.sqrt(1 + self.probit_scale * keypoint_var)
+                road_denominator = torch.sqrt(1 + self.probit_scale * road_var)
+
+                keypoint_logits /= keypoint_denominator
+                road_logits /= road_denominator
+
+                keypoint_score = torch.sigmoid(keypoint_logits)
+                road_score = torch.sigmoid(road_logits)
+
+                mask_logits = torch.cat([keypoint_logits, road_logits], dim=1)
+                mask_scores = torch.cat([keypoint_score, road_score], dim=1)
+            else:
+                mask_scores = torch.sigmoid(mask_logits)
 
         # [B, H, W, 2]
         mask_scores = mask_scores.permute(0, 2, 3, 1)

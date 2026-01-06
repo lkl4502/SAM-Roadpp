@@ -102,13 +102,13 @@ for tile_idx in [
     179,
 ]:
 
-    graph_prop = "%s/graph/%s.p" % (args.savedir, tile_idx)
+    graph_prop = "%s/save/graph/%s.p" % (args.savedir, tile_idx)
     graph_gt = (
-        "/data2/Aerial/RoadGraph/cityscale/20cities/region_%s_graph_gt.pickle"
+        "/home/work/data/RoadGraph/cityscale/20cities/region_%s_graph_gt.pickle"
         % tile_idx
     )
     # TODO(congrui): why modify args?
-    args.output = "%s/results/topo/%s.txt" % (args.savedir, tile_idx)
+    args.output = "%s/save/topo/%s.txt" % (args.savedir, tile_idx)
     output_dir = os.path.dirname(args.output)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

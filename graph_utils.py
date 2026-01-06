@@ -545,7 +545,7 @@ def find_crossover_points(graph):
     line_bboxes = [get_line_bbox(line) for line in lines]
     line_index = rtree.index.Index()
     for idx, bbox in enumerate(line_bboxes):
-        line_index.insert(idx, bbox)
+        line_index.insert(idx, bbox) # MBR (window 생성)
 
     crossover_points = []
     tested_pairs = set()
@@ -605,9 +605,9 @@ def nms_points(points, scores, radius, return_indices=False):
         if not kept[idx]:
             continue
         # neighbor_indices = tree.query_radius(p[np.newaxis, :], r=radius)[0]
-        neighbor_indices = tree.query_ball_point(p, r=radius)
+        neighbor_indices = tree.query_ball_point(p, r=radius)  # 인접 node indice 반환
         neighbor_scores = sorted_scores[neighbor_indices]
-        keep_nbr = np.greater(neighbor_scores, 1.0)
+        keep_nbr = np.greater(neighbor_scores, 1.0)  # neighbor_scores > 1.0
         kept[neighbor_indices] = keep_nbr
         kept[idx] = True
     if return_indices:

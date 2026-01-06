@@ -205,16 +205,18 @@ class GraphLabelGenerator:
         self.graph_kdtree = scipy.spatial.KDTree(self.subdivide_points)
 
         # crossover 점들 학습 제외
+        # 서로 다른 도로가 공간상으로 겹치는 지점 ex ) 고가도로
         crossover_exclude_radius = 4
         exclude_indices = set()
         for p in self.crossover_points:
             nearby_indices = self.graph_kdtree.query_ball_point(
-                p, crossover_exclude_radius
+                p, crossover_exclude_radius # nearby_indices에 p도 포함
             )
             exclude_indices.update(nearby_indices)
         self.exclude_indices = exclude_indices
 
         # 교차로는 항상 학습에 중요하기 때문에 가중치 부여
+        # 연결된 edge가 있는 Node ex ) 사거리 ?
         itsc_indices = set()
         point_num = len(self.full_graph_subdivide.vs)
         for i in range(point_num):
@@ -230,7 +232,7 @@ class GraphLabelGenerator:
             p = self.subdivide_points[i]
             nearby_indices = self.graph_kdtree.query_ball_point(p, interesting_radius)
             interesting_indices.update(nearby_indices)
-        for p in self.crossover_points:
+        for p in self.crossover_points: # 탐색한 crossover point와 거리 4까지는 제외, 4 < r < 32 까지는 가중치
             nearby_indices = self.graph_kdtree.query_ball_point(
                 np.array(p), interesting_radius
             )
@@ -258,8 +260,6 @@ class GraphLabelGenerator:
         # Use NMS to downsample, params shall resemble inference time
         patch_indices = np.array(list(patch_indices))
         if len(patch_indices) == 0:
-            # print("==== Patch is empty ====")
-            # this shall be rare, but if no points in side the patch, return null stuff
             sample_num = self.config.TOPO_SAMPLE_NUM
             max_nbr_queries = self.config.MAX_NEIGHBOR_QUERIES
             fake_points = np.array([[0.0, 0.0]], dtype=np.float32)
@@ -291,7 +291,9 @@ class GraphLabelGenerator:
         nmsed_point_num = nmsed_points.shape[0]
 
         sample_num = self.config.TOPO_SAMPLE_NUM  # 128 or 512
-        sample_weights = self.sample_weights[nmsed_indices]  # 교차점은 0.9 나머지 0.1
+        sample_weights = self.sample_weights[
+            nmsed_indices
+        ]  # 교차점과 cross over 인근은 0.9 나머지 0.1
 
         # indices into the nmsed points in the patch
         sample_indices_in_nmsed = np.random.choice(
@@ -361,7 +363,7 @@ class GraphLabelGenerator:
             axis=1,
         )
         trans = np.array(
-            [
+            [  # 회전 전에 원점을 패치 중심으로 이동
                 [1, 0, -0.5 * self.config.PATCH_SIZE],
                 [0, 1, -0.5 * self.config.PATCH_SIZE],
                 [0, 0, 1],
@@ -370,7 +372,7 @@ class GraphLabelGenerator:
         )
         # ccw 90 deg in img (x, y)
         rot = np.array(
-            [
+            [  # 90도 반시계 회전 행렬, rot_index 0, 1, 2, 3에 따라 회전 각 결정
                 [0, 1, 0],
                 [-1, 0, 0],
                 [0, 0, 1],
@@ -381,7 +383,7 @@ class GraphLabelGenerator:
             nmsed_points
             @ trans.T
             @ np.linalg.matrix_power(rot.T, rot_index)
-            @ np.linalg.inv(trans.T)
+            @ np.linalg.inv(trans.T)  # 중심 이동 좌표 복귀
         )
         nmsed_points = nmsed_points[:, :2]
         return nmsed_points, samples
@@ -401,6 +403,7 @@ def graph_collate_fn(batch):
             tensors = [item[key] for item in batch]
             # 최대 포인트 개수 계산 (동일 크기로 패딩 목적)
             max_point_num = max([x.shape[0] for x in tensors])
+
             padded = []
             for x in tensors:
                 pad_num = max_point_num - x.shape[0]
