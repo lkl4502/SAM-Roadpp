@@ -6,8 +6,24 @@ import matplotlib.pyplot as plt
 from utils import load_config
 
 
+def _load_model_class(experiment_name):
+    """experiments/<experiment_name>/model.py에서 SAMRoadplus 클래스를 로드한다.
+
+    두 실험 모두 모듈 이름이 `model`로 동일하므로, 같은 프로세스에서 여러 실험을
+    잇달아 로드할 때 sys.modules 캐시가 충돌하지 않도록 importlib로 고유한 이름을 부여해 로드한다.
+    """
+    import os
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(__file__), "experiments", experiment_name, "model.py")
+    spec = importlib.util.spec_from_file_location(f"_cmap_test_model_{experiment_name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SAMRoadplus
+
+
 def kuma_variance_map(path, ckpt_path, img_path, gt_path, output_name):
-    from model_kuma import SAMRoadplus
+    SAMRoadplus = _load_model_class("kuma")
 
     img = cv2.imread(img_path)
     gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
@@ -86,7 +102,7 @@ def kuma_variance_map(path, ckpt_path, img_path, gt_path, output_name):
 
 
 def variance_map_heatmap(config_path, ckpt_path, img_path, gt_path, output_name):
-    from model_EMA import SAMRoadplus
+    SAMRoadplus = _load_model_class("ema")
 
     img = cv2.imread(img_path)
     gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
