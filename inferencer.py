@@ -1,3 +1,20 @@
+"""
+학습된 SAM-Road++ 체크포인트로 전체 위성 이미지(2048x2048 등)에 대해 도로 그래프를 추론하는 스크립트.
+
+이미지 한 장이 모델의 입력 패치 크기(PATCH_SIZE)보다 크기 때문에, 다음 2-pass 절차로 진행한다.
+
+1. Pass 1 (`infer_one_img` 앞부분): 이미지를 겹치는 패치들로 잘라 배치로 모델에 통과시켜
+   keypoint/road 마스크를 얻고, 겹치는 영역은 평균을 내어(fused_*) 이미지 전체 크기의
+   마스크로 합친다. 이때 각 패치의 이미지 임베딩(img_features)도 저장해 둔다 (2-pass에서 재사용).
+2. graph_extraction.extract_graph_points로 합쳐진 마스크에서 그래프 노드(교차점/도로점) 후보를 뽑는다.
+3. Pass 2: 노드들을 다시 패치 단위로 묶어, 저장해둔 이미지 임베딩과 함께 TopoNet에 넣어
+   각 노드 쌍이 연결되어 있을 확률(topo_scores)을 구한다. 여러 패치에 걸쳐 중복 예측된
+   엣지는 점수를 평균 내고, TOPO_THRESHOLD를 넘는 엣지만 최종 그래프로 채택한다.
+
+실행: `python inferencer.py --config=<학습에 쓴 config.yaml> --checkpoint=<ckpt 경로>`
+결과는 `--output_dir`(또는 timestamp 기반 디렉터리) 아래 mask/viz/graph 3개 폴더에 저장된다.
+"""
+
 import os
 import cv2
 import time
@@ -51,6 +68,8 @@ def crop_img_patch(img, x0, y0, x1, y1):
 
 
 def get_batch_img_patches(img, batch_patch_info):
+    """dataset.get_patch_info_one_img로 만든 패치 좌표 목록에 따라 실제 이미지를 잘라
+    [B, H, W, C] 텐서 배치로 쌓는다."""
     patches = []
     for _, (x0, y0), (x1, y1) in batch_patch_info:
         patch = crop_img_patch(img, x0, y0, x1, y1)
@@ -60,6 +79,15 @@ def get_batch_img_patches(img, batch_patch_info):
 
 
 def infer_one_img(net, img, config):
+    """이미지 한 장에 대해 위 모듈 docstring에 설명한 2-pass 추론을 수행한다.
+
+    Returns:
+        tuple:
+            pred_nodes (np.ndarray): [N, 2] 예측된 노드 좌표, (row, col) 순서.
+            pred_edges (np.ndarray): [E, 2] 예측된 엣지, 노드 인덱스 쌍.
+            fused_keypoint_mask (np.ndarray): [H, W] uint8, 합쳐진 keypoint 마스크.
+            fused_road_mask (np.ndarray): [H, W] uint8, 합쳐진 road 마스크.
+    """
     # TODO(congrui): centralize these configs
     image_size = img.shape[0]
     batch_size = config.INFER_BATCH_SIZE
@@ -91,6 +119,7 @@ def infer_one_img(net, img, config):
     # list of [B, D, h, w], len=batch_num
     img_features = list()
     img_mask = list()
+    ## Pass 1: 패치 단위로 마스크와 이미지 임베딩을 추론하고, 겹치는 영역을 평균내어 합친다.
     for batch_index in range(batch_num):
         offset = batch_index * batch_size
         batch_patch_info = all_patch_info[offset : offset + batch_size]
@@ -145,6 +174,7 @@ def infer_one_img(net, img, config):
         fused_keypoint_mask, fused_road_mask, config
     )
     if graph_points.shape[0] == 0:
+        # 노드 후보가 하나도 추출되지 않은 경우(빈 이미지 등) 빈 그래프로 조기 반환
         print(1)
         print(graph_points)
         return (
@@ -159,7 +189,7 @@ def infer_one_img(net, img, config):
         x, y = v
         # hack to insert single points
         graph_rtree.insert(i, (x, y, x, y))
-    ## Pass 2: infer toponet to predict topology of points from stored img features
+    ## Pass 2: 저장해둔 이미지 임베딩을 이용해 TopoNet으로 노드 쌍의 연결 확률(topology)을 추론한다.
     edge_scores = defaultdict(float)
     edge_counts = defaultdict(float)
     for batch_index in range(batch_num):
@@ -264,7 +294,8 @@ def infer_one_img(net, img, config):
                     assert 0.0 <= edge_score <= 1.0
                     edge_scores[(src_idx_all, tgt_idx_all)] += edge_score
                     edge_counts[(src_idx_all, tgt_idx_all)] += 1.0
-    # avg edge scores and filter
+    # 같은 엣지가 여러 패치에서 중복 예측될 수 있으므로 점수를 평균 내고,
+    # TOPO_THRESHOLD를 넘는 엣지만 최종 채택한다.
     pred_edges = []
     for edge, score_sum in edge_scores.items():
         score = score_sum / edge_counts[edge]
@@ -278,7 +309,7 @@ def infer_one_img(net, img, config):
 
 if __name__ == "__main__":
     config = load_config(args.config)
-    # Builds eval model
+    # 평가용 모델 생성 및 체크포인트 로드
     device = torch.device("cuda") if args.device == "cuda" else torch.device("cpu")
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
@@ -325,6 +356,7 @@ if __name__ == "__main__":
 
     total_inference_seconds = 0.0
 
+    # 테스트 이미지들을 순회하며 그래프 추론 -> 마스크/시각화/그래프(pickle) 저장
     for img_id in test_img_indices:
         print(f"Processing {img_id}")
         # [H, W, C] RGB

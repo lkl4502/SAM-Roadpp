@@ -1,3 +1,18 @@
+"""
+학습/검증용 PyTorch Dataset 정의.
+
+세 데이터셋(cityscale, globalscale, spacenet)을 공통 인터페이스로 다룬다. 각 원본 위성
+이미지(수천 x 수천 픽셀)에서 학습 시에는 무작위로, 평가 시에는 격자 형태로 PATCH_SIZE
+크기의 패치를 잘라내고, 그 패치 영역에 해당하는 keypoint/road 마스크와 함께 GraphLabelGenerator로
+생성한 그래프 노드/토폴로지 라벨을 반환한다.
+
+핵심 클래스:
+    - GraphLabelGenerator: 이미지 전체의 GT 도로 그래프로부터, 주어진 패치 영역 안에서
+      학습에 쓸 노드 좌표와 (노드 쌍, 연결 여부) 샘플을 뽑아내는 라벨 생성기.
+    - SatMapDataset: 위 라벨 생성기를 이미지별로 들고 있다가, __getitem__에서 패치를 잘라
+      RGB/마스크/그래프 라벨을 함께 텐서로 반환하는 Dataset.
+"""
+
 import cv2
 import math
 import json
@@ -144,6 +159,18 @@ def get_patch_info_one_img(
 
 
 class GraphLabelGenerator:
+    """이미지 한 장의 GT 도로 그래프(full_graph, sat2graph 포맷)로부터 학습용 그래프 라벨을
+    생성하는 클래스. 이미지당 한 번 생성되어, sample_patch가 호출될 때마다 그 패치 영역
+    안에서 노드 좌표와 (source, target) 쌍의 연결 여부(topology) 샘플을 뽑아 반환한다.
+
+    __init__에서 미리 계산해두는 것들:
+        - full_graph_subdivide: 엣지를 촘촘하게 세분화한 그래프 (라벨 밀도 확보용)
+        - crossover_points / exclude_indices: 실제로는 연결되지 않은 채 겹쳐 보이는 지점을
+          찾아 학습 라벨에서 제외
+        - nms_score_override: 교차점(차수!=2)에는 항상 NMS에서 살아남도록 높은 점수 부여
+        - sample_weights: 교차점 근방은 샘플링 확률을 높여 학습이 교차로 구조에 더 집중하도록 함
+    """
+
     def __init__(self, config, full_graph, coord_transform):
         self.config = config
         self.full_graph_origin = graph_utils.igraph_from_adj_dict(
@@ -205,6 +232,24 @@ class GraphLabelGenerator:
         self.sample_weights[list(interesting_indices)] = 0.9
 
     def sample_patch(self, patch, rot_index=0):
+        """주어진 패치 영역 안에서 그래프 노드 좌표와 topology 학습 샘플을 뽑는다.
+
+        절차: 패치 안의 세분화 그래프 점들을 rtree로 조회 -> 랜덤 점수 기반 NMS로 밀도를
+        낮춤(교차점은 점수를 강제로 높여 항상 유지) -> sample_weights에 따라 TOPO_SAMPLE_NUM개
+        점을 샘플링 -> 각 샘플 점마다 KDTree로 이웃 후보를 찾고 BFS로 실제 그래프상 연결
+        여부를 판정 -> 좌표를 패치 기준 상대좌표로 변환(+회전 증강 적용).
+
+        Args:
+            patch (tuple): ((x0, y0), (x1, y1)) 패치의 좌상단/우하단 좌표.
+            rot_index (int): 0~3, 90도 단위 회전 증강 인덱스 (train.py의 회전 증강과 일치시킴).
+
+        Returns:
+            tuple:
+                nmsed_points (np.ndarray): [N, 2] 패치 좌표계로 변환된 노드 좌표.
+                samples (list): 길이 TOPO_SAMPLE_NUM. 각 원소는
+                    (pairs, shall_connect, valid) - 한 소스 노드에 대한 최대
+                    MAX_NEIGHBOR_QUERIES개의 (source, target) 쌍과 실제 연결 여부, 유효성.
+        """
         (x0, y0), (x1, y1) = patch
         query_box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
@@ -372,6 +417,14 @@ def graph_collate_fn(batch):
 
 
 class SatMapDataset(Dataset):
+    """cityscale / globalscale / spacenet 위성 이미지 데이터셋 공통 클래스.
+
+    is_train=True면 매 __getitem__마다 이미지와 패치 위치를 무작위로 골라 샘플링하고(+90도
+    단위 회전 증강), is_train=False면 get_patch_info_one_img로 미리 계산해둔 격자 패치들을
+    순서대로 순회한다(평가 시 재현성/커버리지 확보). 반환값에는 GraphLabelGenerator가 만든
+    그래프 노드/토폴로지 라벨이 함께 포함된다.
+    """
+
     def __init__(
         self,
         config,

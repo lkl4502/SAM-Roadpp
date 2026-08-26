@@ -1,3 +1,13 @@
+"""
+SAM 사전학습 가중치를 쓰지 않는(config.NO_SAM=True) 경우의 대체 이미지 인코더.
+
+detectron2의 ViT(base) 구현을 백본으로 사용하고, MAE(ImageNet)로 사전학습된
+체크포인트(`sam_ckpts/mae_pretrain_vit_base.pth`)를 불러와 초기화한다.
+model.py의 SAMRoadplus.__init__에서 NO_SAM 설정일 때 SAM ImageEncoderViT 대신
+이 VITBEncoder를 사용한다. 출력은 SAM 인코더와 동일한 [B, output_feature_dim, H/16, W/16]
+형태가 되도록 1x1 conv(output_feature_proj)로 채널을 맞춘다.
+"""
+
 import sys
 
 sys.path.insert(0, "./detectron2")
@@ -50,6 +60,8 @@ class VITBEncoder(nn.Module):
             embed_dim, output_feature_dim, kernel_size=1, stride=1
         )
 
+        # MAE(ImageNet) 사전학습 가중치를 불러와서, shape이 일치하는 파라미터만 골라 로드한다.
+        # (SAM 체크포인트가 아니므로 클래스 헤드 등 구조가 다른 파라미터는 자연히 mismatch 처리됨)
         with open("sam_ckpts/mae_pretrain_vit_base.pth", "rb") as f:
             ckpt_state_dict = torch.load(f)["model"]
             ckpt_state_dict = {"vitb." + k: v for k, v in ckpt_state_dict.items()}

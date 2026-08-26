@@ -1,3 +1,13 @@
+"""
+SAM-Road++ 학습 진입점.
+
+config(.yaml)를 읽어 SAMRoadplus 모델과 SatMapDataset(train/val)을 만들고,
+PyTorch Lightning Trainer로 학습을 실행한다. 학습 로그/시각화는 wandb로 기록되며,
+체크포인트는 val_loss 기준 상위 3개가 lightning_logs 디렉터리에 저장된다.
+
+실행: `python train.py --config=config/city-scale/toponet_vitb_512/base.yaml`
+"""
+
 import os
 import torch
 import wandb
