@@ -1,10 +1,15 @@
 import os
+import sys
+
+# 이 스크립트가 experiments/<name>/ 아래로 이동되었으므로,
+# 저장소 루트의 공용 모듈(utils, dataset 등)을 import할 수 있도록 루트를 sys.path에 추가한다.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 import torch
 import wandb
 import lightning.pytorch as pl
 
 from utils import load_config
-from model_WTA_LTA import SAMRoadplus
+from model import SAMRoadplus
 from dotenv import load_dotenv
 from argparse import ArgumentParser
 from dataset import SatMapDataset, graph_collate_fn
