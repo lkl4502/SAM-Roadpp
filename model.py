@@ -1,3 +1,15 @@
+"""
+SAM-Road++ 모델(학습용) 정의.
+
+전체 구조: RGB 패치 이미지 -> (SAM 또는 vitdet) 이미지 인코더 -> 마스크 디코더(keypoint/road
+2채널 마스크) -> BilinearSampler로 그래프 노드 위치의 feature 추출 -> TopoNet으로 노드 쌍의
+연결(edge) 여부 예측.
+
+PyTorch Lightning의 LightningModule(SAMRoadplus)로 학습 루프(training_step/validation_step/
+configure_optimizers 등)까지 함께 정의되어 있으며, train.py에서 이 클래스를 그대로 생성해
+pl.Trainer.fit에 넘긴다. 추론 전용 버전은 modelinfer.py의 동명 클래스를 참고.
+"""
+
 import math
 import torch
 import wandb
@@ -430,7 +442,17 @@ class _LoRA_qkv(nn.Module):
 
 
 class SAMRoadplus(pl.LightningModule):
-    """This is the RelationFormer module that performs object detection"""
+    """SAM-Road++ 학습용 모델.
+
+    구성 요소:
+        - image_encoder: SAM ViT (또는 config.NO_SAM=True 시 vitdet.VITBEncoder)
+        - map_decoder (또는 SAM MaskDecoder): keypoint/road 2채널 마스크 예측
+        - bilinear_sampler: 그래프 노드 좌표 위치의 이미지 feature를 샘플링
+        - topo_net: 노드 쌍이 도로로 연결되어 있는지(topology) 예측
+
+    config.ENCODER_LORA가 True면 image_encoder의 attention qkv에 LoRA 어댑터를 삽입해
+    인코더 전체 대신 저랭크 파라미터만 학습한다.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -637,6 +659,9 @@ class SAMRoadplus(pl.LightningModule):
     def resize_sam_pos_embed(
         self, state_dict, image_size, vit_patch_size, encoder_global_attn_indexes
     ):
+        """SAM 체크포인트는 image_size=1024 기준으로 학습되어 있으므로, PATCH_SIZE가
+        다르면(예: 512) positional embedding과 global attention 레이어의 relative
+        position 파라미터를 bilinear interpolation으로 리사이즈해서 shape을 맞춘다."""
         new_state_dict = {k: v for k, v in state_dict.items()}
         pos_embed = new_state_dict["image_encoder.pos_embed"]
         token_size = int(image_size // vit_patch_size)
@@ -672,6 +697,7 @@ class SAMRoadplus(pl.LightningModule):
         return new_state_dict
 
     def forward(self, rgb, graph_points, pairs, valid):
+        # 이미지 인코딩 -> 마스크 디코딩 -> 그래프 노드 feature 샘플링 -> TopoNet 순서로 전방 전파
         # rgb: [B, H, W, C]
         # graph_points: [B, N_points, 2]
         # pairs: [B, N_samples, N_pairs, 2]
@@ -728,6 +754,7 @@ class SAMRoadplus(pl.LightningModule):
         return mask_logits, mask_scores, topo_logits, topo_scores
 
     def training_step(self, batch, batch_idx):
+        # 전체 loss = mask_loss(keypoint/road 마스크 BCE) + topo_loss(노드 쌍 연결 여부 BCE)
         # masks: [B, H, W]
         rgb, keypoint_mask, road_mask = (
             batch["rgb"],
@@ -753,6 +780,7 @@ class SAMRoadplus(pl.LightningModule):
             topo_logits, topo_gt.unsqueeze(-1).to(torch.float32)
         )
 
+        # 패딩된(invalid) 쌍은 loss 계산에서 제외하기 위해 마스킹 후 평균
         topo_loss *= topo_loss_mask.unsqueeze(-1)
         topo_loss = torch.nansum(torch.nansum(topo_loss) / topo_loss_mask.sum())
 
@@ -895,6 +923,8 @@ class SAMRoadplus(pl.LightningModule):
         find_best_threshold(self.topo_pr_curve, "topo")
 
     def configure_optimizers(self):
+        # 컴포넌트별로 서로 다른 learning rate를 적용하기 위해 파라미터 그룹을 나눠 구성한다.
+        # (예: 사전학습된 인코더는 ENCODER_LR_FACTOR만큼 낮은 lr, 새로 학습하는 디코더/토포넷은 BASE_LR)
         param_dicts = []
         if not self.config.FREEZE_ENCODER and not self.config.ENCODER_LORA:
             encoder_params = {

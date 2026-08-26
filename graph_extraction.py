@@ -1,3 +1,14 @@
+"""
+모델이 예측한 keypoint mask / road mask(픽셀 단위 확률맵)로부터 도로 그래프(노드+엣지)를
+추출하는 후처리 로직.
+
+흐름:
+1. `extract_graph_points`: 두 마스크에서 임계값을 넘는 픽셀을 후보 점으로 뽑고 NMS로 솎아낸다.
+2. `extract_graph_astar`: 후보 점들 사이를 A*(tcod)로 실제 도로 위를 지나는지 검사해 엣지를 연결한다.
+   (참고: SAM-Road++ 파이프라인 실제 추론에서는 A* 대신 학습된 TopoNet으로 엣지를 예측하며,
+   이 파일의 A* 방식은 대안/디버깅용 그래프 추출 방법이다.)
+"""
+
 import cv2
 import tcod
 import numpy as np
@@ -23,6 +34,7 @@ def read_rgb_img(path):
 
 # returns (x, y)
 def get_points_and_scores_from_mask(mask, threshold):
+    """마스크에서 threshold를 넘는 픽셀들의 (x, y) 좌표와 해당 값을 점수로 추출한다."""
     rcs = np.column_stack(np.where(mask > threshold))
     xys = rcs[:, ::-1]
     scores = mask[mask > threshold]
@@ -71,6 +83,9 @@ def draw_points_on_grayscale_image(image, points, radius):
 
 # takes xy
 def is_connected_bresenham(cost, start, end):
+    """Bresenham 직선 알고리즘으로 start-end를 잇는 픽셀들을 훑어, cost 값이 모두 255 미만인지
+    (즉, 도로가 아닌 막힌 픽셀을 지나지 않는지) 검사한다. is_connected_astar보다 단순/저렴한
+    "직선 경로만" 검사하는 방식 (현재 코드에서는 is_connected_astar가 실제로 쓰인다)."""
     c0, r0 = start
     c1, r1 = end
     rr, cc = line(r0, c0, r1, c1)
@@ -88,6 +103,9 @@ def is_connected_bresenham(cost, start, end):
 
 
 def is_connected_astar(pathfinder, cost, start, end, max_path_len):
+    """A*(tcod)로 start에서 end까지 cost 맵 위를 우회 경로까지 포함해 탐색하고,
+    경로가 존재하며 그 길이가 max_path_len보다 짧으면 두 점이 연결된 것으로 판단한다.
+    시작/끝점 주변은 일시적으로 통행 가능(cost=1)하게 뚫어준 뒤 탐색이 끝나면 원복한다."""
     # we can still modify the cost matrix after creating the pathfinder with it
     # seems pathfinder uses reference
     c0, r0 = start
@@ -106,6 +124,8 @@ def is_connected_astar(pathfinder, cost, start, end, max_path_len):
 
 
 def create_cost_field(sample_pts, road_mask):
+    """is_connected_bresenham용 cost 필드 생성. 도로가 아닌 영역(255-road_mask)과
+    후보 점 주변 원을 255(막힘)로 표시한다. (road mask는 0-255 uint8이어야 함)"""
     # road mask shall be uint8 normalized to 0-255
     cost_field = np.zeros(road_mask.shape, dtype=np.uint8)
     kp_block_radius = 4
@@ -116,6 +136,10 @@ def create_cost_field(sample_pts, road_mask):
 
 
 def create_cost_field_astar(sample_pts, road_mask, block_threshold=200):
+    """is_connected_astar(tcod)용 cost 필드 생성. tcod에서는 0이 '통행 불가'를 의미하므로
+    road_mask 기반 cost를 반전시켜, 도로가 아니거나(255-road_mask) 값이 block_threshold보다
+    큰 픽셀은 0(막힘)으로, 그 외는 1(통행 가능, 낮은 비용)로 만든다.
+    (road mask는 0-255 uint8이어야 함)"""
     # road mask shall be uint8 normalized to 0-255
     # for tcod, 0 is blocked
     cost_field = np.zeros(road_mask.shape, dtype=np.uint8)
@@ -130,6 +154,16 @@ def create_cost_field_astar(sample_pts, road_mask, block_threshold=200):
 
 
 def extract_graph_points(keypoint_mask, road_mask, config):
+    """keypoint_mask와 road_mask로부터 그래프 노드가 될 후보 점들을 추출한다.
+
+    1) keypoint_mask(교차점 확률맵)에서 ITSC_THRESHOLD를 넘는 픽셀을 NMS(반경 ITSC_NMS_RADIUS)로 솎아낸다.
+    2) road_mask(도로 확률맵)에서 ROAD_THRESHOLD를 넘는 픽셀을 NMS(반경 ROAD_NMS_RADIUS)로 솎아낸다.
+    3) 두 후보 집합을 합치되, keypoint 유래 점에는 점수 1.0을 부여해 NMS 시 우선권을 준다
+       (교차점이 도로 점보다 우선적으로 살아남도록).
+
+    Returns:
+        np.ndarray: [N, 2] 최종 채택된 (x, y) 노드 후보 좌표.
+    """
     kp_candidates, kp_scores = get_points_and_scores_from_mask(
         keypoint_mask, config.ITSC_THRESHOLD * 255
     )
@@ -148,6 +182,12 @@ def extract_graph_points(keypoint_mask, road_mask, config):
 
 
 def extract_graph_astar(keypoint_mask, road_mask, config):
+    """마스크에서 추출한 노드 후보들을 A* 경로 탐색으로 연결하여 networkx 그래프를 만든다.
+
+    각 노드에 대해 NEIGHBOR_RADIUS 이내의 다른 노드들을 KDTree로 찾고, A*로 도로 위를
+    지나는 경로가 존재하면 두 노드를 엣지로 연결한다. TopoNet 기반 추론(inferencer.py)의
+    대안이 되는, 학습 없이 마스크만으로 그래프를 만드는 휴리스틱 방법이다.
+    """
     kps = extract_graph_points(keypoint_mask, road_mask, config)
 
     # cost_field = create_cost_field(kps, road_mask)

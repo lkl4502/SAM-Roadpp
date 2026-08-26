@@ -1,3 +1,17 @@
+"""
+도로 그래프(노드-엣지 구조)를 다루기 위한 유틸리티 모음.
+
+크게 세 가지 용도로 쓰인다.
+1. 그래프 정제: 고립 노드 제거, 인접 노드 병합, 너무 긴 엣지 분할 등 (`remove_isolate_nodes`,
+   `merge_nodes`, `split_edges`, `merge_into_large_graph`)
+2. 포맷 변환: Sat2Graph 포맷(dict) <-> (nodes, edges) 배열 <-> networkx/igraph 그래프
+   상호 변환 (`convert_to_sat2graph_format`, `convert_from_sat2graph_format`,
+   `convert_from_nx`, `igraph_from_adj_dict`)
+3. 학습용 그래프 라벨 생성 보조: 그래프 세분화(subdivide), 교차점(crossover) 탐색,
+   포인트 NMS, BFS 탐색 등 (`subdivide_graph`, `find_crossover_points`, `nms_points`,
+   `bfs_with_conditions`) - dataset.py의 GraphLabelGenerator에서 사용된다.
+"""
+
 import rtree
 import scipy
 import unittest
@@ -17,8 +31,12 @@ from shapely.strtree import STRtree
 
 
 def inspect_graph(node_array, edge_array):
-    # node_array: [N_node, 2] coordinates of nodes.
-    # edge_array: [N_edge, 2] (src_idx, dst_idx) tuples.
+    """디버깅용: 단방향 엣지 개수와 중복(거의 같은 위치) 노드 개수를 출력한다.
+
+    Args:
+        node_array (np.ndarray): [N_node, 2] 노드 좌표.
+        edge_array (np.ndarray): [N_edge, 2] (src_idx, dst_idx) 쌍.
+    """
     edge_set = set()
     for edge in edge_array:
         src, dst = edge[0], edge[1]
@@ -39,11 +57,18 @@ def inspect_graph(node_array, edge_array):
 
 
 def filter_nodes(node_array, edge_array, keep_node):
-    # Filters nodes, removes edges connecting to them,
-    # and updates indices in edges.
-    # node_array: [N_node, 2] coordinates of nodes.
-    # edge_array: [N_edge, 2] (src_idx, dst_idx) tuples.
-    # keep_node: [N_node, ] boolean mask.
+    """keep_node 마스크로 노드를 필터링하고, 삭제된 노드에 연결된 엣지도 함께 제거한다.
+
+    노드 인덱스가 재배열되므로 edge_array의 인덱스도 새 인덱스로 갱신한다.
+
+    Args:
+        node_array (np.ndarray): [N_node, 2] 노드 좌표.
+        edge_array (np.ndarray): [N_edge, 2] (src_idx, dst_idx) 쌍.
+        keep_node (np.ndarray): [N_node,] 남길 노드를 표시하는 bool 마스크.
+
+    Returns:
+        tuple: (필터링된 노드 배열, 인덱스가 갱신된 엣지 배열)
+    """
     new_nodes = node_array[keep_node, :]
     old_node_num = node_array.shape[0]
     keep_indices = np.where(keep_node)[0]
@@ -62,6 +87,9 @@ def filter_nodes(node_array, edge_array, keep_node):
     return new_nodes, new_edges
 
 
+# NOTE: 아래 두 함수는 이름이 같은 edge_list_to_adj_table이며, 두 번째 정의가 첫 번째를 덮어써서
+# 실제로는 (nodes, edges)를 받는 버전만 사용된다. 첫 번째 버전은 nodes 인자 없이 edge에 등장한
+# 인덱스로부터 노드 개수를 추정하던 예전 버전으로 보인다 (죽은 코드지만 참고용으로 남아있음).
 def edge_list_to_adj_table(edges):
     # edges: [[src_idx, dst_idx], ...] node indices must start from 0 and
     # be continuous.
@@ -82,11 +110,15 @@ def edge_list_to_adj_table(edges):
 
 
 def edge_list_to_adj_table(nodes, edges):
-    # edges: [[src_idx, dst_idx], ...] node indices must start from 0 and
-    # be continuous.
-    # Returns:
-    # adj_table: list of sets. len(adj_table) = num_nodes, adj_table[i]
-    # = neighbor node indices of node i. Empty if no neighbors.
+    """엣지 리스트를 인접 리스트(adjacency list)로 변환한다.
+
+    Args:
+        nodes: 노드 목록 (개수만 사용됨).
+        edges: [[src_idx, dst_idx], ...] 노드 인덱스는 0부터 시작하는 연속된 정수여야 한다.
+
+    Returns:
+        list[set]: adj_table[i] = 노드 i의 이웃 노드 인덱스 집합 (단방향, src -> dst만 기록됨).
+    """
     node_num = len(nodes)
     adj_table = [set() for i in range(node_num)]
     for edge in edges:
@@ -96,6 +128,17 @@ def edge_list_to_adj_table(nodes, edges):
 
 
 def trace_segment(start_edge, adj_table):
+    """시작 엣지에서 출발하여, 차수(degree)가 2인 노드를 계속 따라가며 하나의 폴리라인(segment)을 추적한다.
+
+    분기점(차수!= 1인 미방문 이웃이 여러 개이거나 0개)을 만나면 추적을 멈춘다.
+
+    Args:
+        start_edge (tuple): 추적을 시작할 (start_node, next_node) 쌍.
+        adj_table (list[set]): edge_list_to_adj_table로 만든 인접 리스트.
+
+    Returns:
+        list[int]: 추적된 segment를 구성하는 노드 인덱스 순서 리스트.
+    """
     segment_nodes = [start_edge[0], start_edge[1]]
     visited_nodes = set(segment_nodes)
     while True:
@@ -114,15 +157,23 @@ def trace_segment(start_edge, adj_table):
 
 
 def unique_edge(src, dst):
+    """방향에 상관없이 동일한 엣지를 같은 키로 취급하기 위해 (작은 인덱스, 큰 인덱스) 순으로 정규화."""
     return (min(src, dst), max(src, dst))
 
 
 def find_segments_in_road_graph(adj_table):
-    # adj_table: road graph represented as adj table of nodes, as produced
-    # by edge_list_to_adj_table.
-    # Returns:
-    # segments: list of lists, segments[i] = list of nodes forming the i-th
-    # segment.
+    """도로 그래프를 교차점(차수 != 2인 노드) 사이의 폴리라인 segment 목록으로 분해한다.
+
+    각 교차점/끝점 노드에서 시작해 아직 방문하지 않은 엣지를 하나씩 따라가며
+    trace_segment로 segment를 추적한다. 고립된 루프(모든 노드의 차수가 2인 폐곡선)는
+    어느 교차점에서도 시작되지 않으므로 별도 경고를 출력한다.
+
+    Args:
+        adj_table (list[set]): edge_list_to_adj_table로 만든 도로 그래프의 인접 리스트.
+
+    Returns:
+        list[list[int]]: segments[i] = i번째 segment를 구성하는 노드 인덱스 리스트.
+    """
     segments = list()
     visited_edges = set()
     # Goes over each edge in the graph.
@@ -156,10 +207,18 @@ def find_segments_in_road_graph(adj_table):
 
 
 def normalize_segments(coords, segments):
-    # A segment has two endpoints. Makes sure the one with smaller x goes
-    # first. If tie, The one with smaller y goes first.
-    # coords: [N_node, 2] node coords.
-    # segments: [list_of_segment_node_indices, ...]
+    """각 segment의 방향을 정규화한다. x가 더 작은 끝점이 먼저 오도록(같으면 y가 작은 쪽) 뒤집는다.
+
+    같은 segment를 항상 동일한 방향으로 표현하기 위한 정규화이며, 이후 폴리라인 리샘플링이나
+    비교 연산 시 방향 모호성을 없애기 위해 사용된다.
+
+    Args:
+        coords (np.ndarray): [N_node, 2] 노드 좌표.
+        segments (list[list[int]]): find_segments_in_road_graph의 결과.
+
+    Returns:
+        list[list[int]]: 방향이 정규화된 segment 리스트.
+    """
     normalized_segments = []
     for i in range(len(segments)):
         segment = segments[i]
@@ -175,11 +234,17 @@ def normalize_segments(coords, segments):
 
 
 def get_resampled_polylines(coords, segments, num_points):
-    # Uniformly resamples each polyline defined by segments to num_points.
-    # coords: [N_node, 2] node coords.
-    # segments: [list_of_segment_node_indices, ...]
-    # Returns:
-    # list of [num_points, 2].
+    """각 segment(폴리라인)를 shapely LineString으로 만든 뒤, 호(arc length) 기준으로
+    num_points개 지점으로 균등 리샘플링한다.
+
+    Args:
+        coords (np.ndarray): [N_node, 2] 노드 좌표.
+        segments (list[list[int]]): segment를 구성하는 노드 인덱스 리스트들.
+        num_points (int): 리샘플링할 포인트 개수.
+
+    Returns:
+        list[np.ndarray]: 각 원소가 [num_points, 2] 형태인 리샘플링된 폴리라인 리스트.
+    """
 
     resampled_polylines = []
 
@@ -201,6 +266,11 @@ def get_resampled_polylines(coords, segments, num_points):
 
 
 def get_polylines_from_road_graph(coords, edges, num_points_per_segment):
+    """도로 그래프(노드+엣지)를 교차점 단위로 끊은 폴리라인 리스트로 변환하는 파이프라인 함수.
+
+    edge_list_to_adj_table -> find_segments_in_road_graph -> normalize_segments ->
+    get_resampled_polylines 순서로 적용한다.
+    """
     adj_table = edge_list_to_adj_table(edges)
     segments = find_segments_in_road_graph(adj_table)
     segments = normalize_segments(coords, segments)
@@ -209,15 +279,17 @@ def get_polylines_from_road_graph(coords, edges, num_points_per_segment):
 
 
 def get_polyline_connectivity(polylines, dist_threhsold):
-    # Gets undirected connectivity between polylines by checking if endpoints
-    # overlap.
-    # polylines: list of [N_points, 2] arrays.
-    # dist_threshold: points closer than this are considered connected.
-    # Returns:
-    # connected_pairs: [N_pairs, 2] (src_idx, dst_idx). The reverse pair will also be
-    # here.
-    # connected_point_indices: [N_pairs, 2] indices of overlapping points in
-    # their polylines.
+    """폴리라인들의 끝점끼리 거리가 가까우면 서로 연결된 것으로 간주하여 연결 관계를 찾는다.
+
+    Args:
+        polylines (list[np.ndarray]): 각 원소가 [N_points, 2]인 폴리라인 리스트.
+        dist_threhsold (float): 이 거리보다 가까운 끝점 쌍은 연결된 것으로 판단.
+
+    Returns:
+        tuple:
+            connected_pairs (list[tuple]): (src_idx, dst_idx) 폴리라인 인덱스 쌍. 역방향 쌍도 포함됨.
+            connected_point_indices (list[tuple]): 각 폴리라인에서 겹치는 끝점의 인덱스(0 또는 마지막).
+    """
     connected_pairs = []
     connected_point_indices = []
     polyline_num = len(polylines)
@@ -240,7 +312,7 @@ def get_polyline_connectivity(polylines, dist_threhsold):
 
 
 def visualize_polylines(image, polylines):
-    # Draws all polylines on the image, each with a different color.
+    # 디버깅/시각화용: 각 폴리라인을 서로 다른 색으로 이미지 위에 그려서 matplotlib으로 표시.
     # image: [H, W, C]
     # polylines: list of [length, 2] float arrays, each entry a (row, col)
     # tuple in pixel coordinates.
@@ -261,7 +333,7 @@ def visualize_polylines(image, polylines):
 def visualize_polyline_graph(
     image, polylines, connected_pairs, connected_point_indices
 ):
-    # Draws each connected pair, one by one, red->green
+    # 디버깅용: get_polyline_connectivity로 찾은 연결 쌍을 하나씩 순서대로(빨강->초록) 시각화.
     for pair_idx, (pair, endpoints) in enumerate(
         zip(connected_pairs, connected_point_indices)
     ):
@@ -278,7 +350,10 @@ def visualize_polyline_graph(
 
 
 ## Utils for aggregating the large map.
+# 아래 4개 함수는 추론 시 패치 단위로 예측한 그래프 조각들을 이어붙여
+# 하나의 큰 지도로 합칠 때(merge_into_large_graph) 사용된다.
 def remove_isolate_nodes(nodes, edges):
+    """어떤 엣지에도 연결되지 않은 고립 노드를 제거하고, 남은 노드로 인덱스를 재정렬한다."""
     node_indices = np.arange(nodes.shape[0])
     graph = nx.Graph()
     graph.add_nodes_from(node_indices)
@@ -298,6 +373,19 @@ def remove_isolate_nodes(nodes, edges):
 
 
 def merge_nodes(nodes, edges, distance_threshold):
+    """DBSCAN으로 distance_threshold 이내에 몰려있는 노드들을 하나의 클러스터로 묶고,
+    클러스터 중심 좌표로 병합한다. 패치 경계에서 겹치는 노드를 하나로 합칠 때 사용.
+
+    같은 클러스터로 합쳐진 두 노드를 잇는 엣지(자기 자신으로의 엣지)는 제거된다.
+
+    Args:
+        nodes (np.ndarray): [N_node, 2] 노드 좌표.
+        edges (list[tuple]): (src_idx, dst_idx) 엣지 리스트.
+        distance_threshold (float): 같은 클러스터로 묶을 거리 기준.
+
+    Returns:
+        tuple: (클러스터 중심 좌표 배열, 병합된 유일한 엣지 리스트)
+    """
     clustering = DBSCAN(eps=distance_threshold, min_samples=1).fit(nodes)
     node_cluster_indices = clustering.labels_
     num_clusters = len(np.unique(node_cluster_indices))
@@ -323,6 +411,21 @@ def merge_nodes(nodes, edges, distance_threshold):
 
 
 def split_edges(nodes, edges, distance_threshold):
+    """엣지 근처(distance_threshold 이내)에 다른 노드가 있으면, 그 노드를 경유하도록
+    엣지를 둘로 쪼갠다. 인접 패치에서 온 노드가 엣지 중간을 가로막고 있을 때
+    두 그래프 조각을 자연스럽게 이어 붙이기 위해 사용한다.
+
+    STRtree로 각 엣지 주변(buffer)의 후보 노드를 찾고, 가장 가까운 노드를 경유점으로 삼아
+    큐 기반으로 재귀적으로(더 쪼갤 게 없을 때까지) 분할한다.
+
+    Args:
+        nodes (np.ndarray): [N_node, 2] 노드 좌표.
+        edges (list[tuple]): (src_idx, dst_idx) 엣지 리스트.
+        distance_threshold (float): 엣지와 노드 사이, 분할을 트리거하는 거리 기준.
+
+    Returns:
+        tuple: (노드 배열 그대로, 분할되어 갱신된 유일한 엣지 리스트)
+    """
     points = [Point(x, y) for x, y in nodes]
     point_tree = STRtree(points)
 
@@ -368,6 +471,14 @@ def split_edges(nodes, edges, distance_threshold):
 
 
 def combine_graphs(graphs):
+    """여러 (nodes, edges) 그래프 조각을 노드 인덱스 오프셋을 적용해 하나로 이어붙인다(병합 없이 단순 합집합).
+
+    Args:
+        graphs (list[tuple]): [(nodes, edges), ...] 형태의 그래프 조각 리스트.
+
+    Returns:
+        tuple: (합쳐진 노드 배열, 인덱스가 오프셋된 엣지 배열)
+    """
     # graphs: list of (nodes, edges)
     offset = 0
     combined_nodes, combined_edges = [], []
@@ -385,6 +496,11 @@ def combine_graphs(graphs):
 def merge_into_large_graph(
     nodes, edges, merge_node_dist_thresh, split_edge_dist_thresh
 ):
+    """여러 패치에서 예측된 그래프 조각들을 하나의 정합된 큰 그래프로 정리하는 전체 파이프라인.
+
+    순서: 고립 노드 제거 -> 가까운 노드 병합 -> 엣지가 다른 노드를 가로지르면 분할
+    -> 다시 고립 노드 제거. combine_graphs로 합친 직후에 호출하는 것을 전제로 한다.
+    """
     nodes1, edges1 = remove_isolate_nodes(nodes, edges)
     nodes2, edges2 = merge_nodes(
         nodes1, edges1, distance_threshold=merge_node_dist_thresh
@@ -397,13 +513,16 @@ def merge_into_large_graph(
 
 
 def convert_to_sat2graph_format(nodes, edges):
-    # Converts a graph to the same format as the labels
-    # in Sat2Graph.
-    # nodes: [N_node, 2] of the (row, col) image coordinates.
-    # edges: [N_edge, 2] pairs of (start, end) node indices.
-    # Returns: A dict. Keys are (row, col) coordinates of each node. Float inputs will be rounded to int.
-    # Values are lists, each item being a (row, col) of a neighbor node.
-    # Edges are not directed. Input edges will be combined with reverse edges.
+    """(nodes, edges) 배열 표현을 Sat2Graph 라벨 포맷(dict)으로 변환한다.
+
+    Args:
+        nodes (np.ndarray): [N_node, 2] (row, col) 이미지 좌표.
+        edges (np.ndarray): [N_edge, 2] (start, end) 노드 인덱스 쌍.
+
+    Returns:
+        dict: 키는 각 노드의 (row, col) 좌표(실수는 반올림), 값은 이웃 노드들의 (row, col) 리스트.
+        무방향 그래프이므로 입력 엣지에 역방향 엣지를 추가하여 양쪽 모두 기록한다.
+    """
     reverse_edges = edges[:, ::-1]
     all_edges = np.concatenate((edges, reverse_edges), axis=0)
 
@@ -422,13 +541,16 @@ def convert_to_sat2graph_format(nodes, edges):
 
 
 def convert_from_sat2graph_format(graph):
-    # Converts a graph from the Sat2Graph label format to nodes and edges.
-    # graph: A dict. Keys are (row, col) coordinates of each node. Float inputs will be rounded to int.
-    # Values are lists, each item being a (row, col) of a neighbor node.
-    # Edges are not directed and ARE NOT DE-DUPLICATED.
-    # Returns:
-    # nodes: [N_node, 2] of the (row, col) image coordinates.
-    # edges: [N_edge, 2] pairs of (start, end) node indices.
+    """Sat2Graph 라벨 포맷(dict)을 (nodes, edges) 배열 표현으로 변환한다. convert_to_sat2graph_format의 역변환.
+
+    Args:
+        graph (dict): 키는 각 노드의 (row, col) 좌표, 값은 이웃 노드들의 (row, col) 리스트.
+
+    Returns:
+        tuple:
+            nodes (np.ndarray): [N_node, 2] (row, col) 이미지 좌표.
+            edges (list[tuple]): (start, end) 노드 인덱스 쌍. 무방향이며 중복 제거는 하지 않는다.
+    """
     node_to_idx = dict()
     for node, neighbors in graph.items():
         if node not in node_to_idx.keys():
@@ -451,10 +573,17 @@ def convert_from_sat2graph_format(graph):
 
 
 def convert_from_nx(graph):
-    # nx graph, node being (x, y)
-    # Returns:
-    # nodes: [N_node, 2] of the (row, col) image coordinates.
-    # edges: [N_edge, 2] pairs of (start, end) node indices.
+    """networkx 그래프(노드가 (x, y) 튜플)를 (nodes, edges) 배열 표현으로 변환한다.
+    좌표는 (x, y) -> (row, col)로 뒤바뀐다.
+
+    Args:
+        graph (nx.Graph): 노드가 (x, y) 좌표 튜플인 networkx 그래프.
+
+    Returns:
+        tuple:
+            nodes (np.ndarray): [N_node, 2] (row, col) 이미지 좌표.
+            edges (np.ndarray): [N_edge, 2] (start, end) 노드 인덱스 쌍.
+    """
     node_to_idx = dict()
     nodes = list()
     edges = list()
@@ -470,10 +599,21 @@ def convert_from_nx(graph):
 
 
 ### igraph utils for performance
+# 아래 함수들은 dataset.py의 GraphLabelGenerator에서 학습용 그래프 라벨을 만들 때 쓰인다.
+# python 순정 구조 대신 igraph를 쓰는 이유는 대규모 그래프 연산 속도 때문.
 
 
 def igraph_from_adj_dict(graph, coord_transform):
-    # Edges will be de-duped
+    """Sat2Graph 포맷의 adjacency dict를 igraph 그래프 객체로 변환한다 (엣지는 중복 제거됨).
+
+    Args:
+        graph (dict): Sat2Graph 포맷의 adjacency dict ((row, col) -> [(row, col), ...]).
+        coord_transform (callable): [N, 2] 좌표 배열을 받아 (예: (r,c) -> (x,y)) 변환하는 함수.
+            변환된 좌표가 각 정점의 "point" 속성으로 저장된다.
+
+    Returns:
+        ig.Graph: 정점 속성 "point"에 변환된 좌표가 담긴 igraph 그래프.
+    """
     nodes, edges = convert_from_sat2graph_format(graph)
     n_vertices = nodes.shape[0]
     if n_vertices == 0:
@@ -493,6 +633,7 @@ def igraph_from_adj_dict(graph, coord_transform):
 
 
 def get_line_bbox(line):
+    """선분 (x0,y0)-(x1,y1)을 감싸는 바운딩 박스를 1픽셀 여유를 두고 계산한다 (rtree 질의용)."""
     (x0, y0), (x1, y1) = line
     l = min(x0, x1) - 1
     b = min(y0, y1) - 1
@@ -535,6 +676,19 @@ def find_intersection(segment1, segment2):
 
 
 def find_crossover_points(graph):
+    """도로 그래프에서 서로 다른 두 엣지가 (교차점 노드 없이) 시각적으로 겹쳐 지나가는
+    교차 지점(예: 입체교차로처럼 실제로는 연결되지 않은 두 도로가 겹쳐 보이는 곳)을 찾는다.
+
+    각 엣지의 바운딩 박스를 rtree에 등록해 후보 쌍만 빠르게 찾아 교차 여부를 검사한다.
+    NOTE: A가 B와 교차하는 경우와 B가 A와 교차하는 경우를 각각 세므로 같은 교차점이
+    두 번 카운트될 수 있다 (현재는 문제없이 사용 중이라 이대로 둠).
+
+    Args:
+        graph (ig.Graph): igraph_from_adj_dict로 만든, "point" 속성을 가진 igraph 그래프.
+
+    Returns:
+        list[tuple]: 교차점 (x, y) 좌표 리스트.
+    """
     # takes igraph
     # y axis shall point upwards for rtree to work properly
     # crossover points are counted twice: A cross B, B cross A
@@ -566,7 +720,19 @@ def find_crossover_points(graph):
 
 
 def subdivide_graph(graph, resolution):
-    # 더 많은 점을 찍어 촘촘한 그래프를 만들기 위함
+    """각 엣지를 resolution 간격으로 세분화하여 원본 엣지 위에 새로운 정점들을 추가한 그래프를 만든다.
+
+    긴 도로 엣지를 짧은 구간들로 잘게 쪼개어, 이후 point-wise한 라벨 샘플링/NMS/최근접
+    탐색(KD-tree) 등이 도로 전체에 걸쳐 촘촘하게 이뤄지도록 하기 위함이다
+    (더 많은 점을 찍어 촘촘한 그래프를 만들기 위함).
+
+    Args:
+        graph (ig.Graph): "point" 속성을 가진 igraph 그래프.
+        resolution (float): 세분화 간격(픽셀 단위). 엣지 길이를 이 값으로 나눈 몫만큼 조각낸다.
+
+    Returns:
+        ig.Graph: 원본 정점 + 세분화로 추가된 정점을 모두 포함하는 새 그래프.
+    """
     new_points = [p for p in graph.vs["point"]]
     new_edges = []
     for edge in graph.es:
@@ -595,6 +761,21 @@ def subdivide_graph(graph, resolution):
 
 
 def nms_points(points, scores, radius, return_indices=False):
+    """점 집합에 대한 Non-Maximum Suppression. score가 높은 점부터 순서대로 채택하고,
+    이미 채택된 점 반경(radius) 이내의 다른 점들은 억제(제거)한다.
+
+    score가 1.0을 초과하는 점은 (교차점처럼 항상 유지해야 하는 점) 다른 점에 의해
+    억제되더라도 강제로 유지된다.
+
+    Args:
+        points (np.ndarray): [N, 2] 후보 점 좌표.
+        scores (np.ndarray): [N,] 각 점의 점수. 높을수록 우선 채택.
+        radius (float): 억제 반경. 이 거리 이내의 낮은 점수 점들은 제거됨.
+        return_indices (bool): True면 원본 points 배열 기준 인덱스도 함께 반환.
+
+    Returns:
+        np.ndarray 또는 (np.ndarray, np.ndarray): 채택된 점들의 좌표 (그리고 선택적으로 원본 인덱스).
+    """
     # if score > 1.0, the point is forced to be kept regardless
     sorted_indices = np.argsort(scores)[::-1]
     sorted_points = points[sorted_indices, :]
@@ -618,18 +799,19 @@ def nms_points(points, scores, radius, return_indices=False):
 
 def bfs_with_conditions(graph, start_node, stop_nodes, max_depth):
     """
-    Perform BFS on an igraph graph (directed or undirected) from a given start node.
-    The search stops if it visits a node from a given set of stop nodes or if the depth reaches a threshold.
-    The function returns the set of visited nodes, including stop nodes if encountered.
+    igraph 그래프에서 start_node로부터 BFS(너비 우선 탐색)를 수행한다.
+    stop_nodes에 포함된 노드를 방문하거나 깊이가 max_depth에 도달하면 그 지점에서 더 이상
+    확장하지 않는다. dataset.py에서 두 점이 그래프상으로 max_depth(=이웃 탐색 반경) 이내에
+    실제로 연결되어 있는지(topology label) 판정할 때 사용된다.
 
     Args:
-    - graph (ig.Graph): The graph to search.
-    - start_node (int): The index of the node to start the BFS from.
-    - stop_nodes (set): A set of node indices where the search will stop if visited.
-    - max_depth (int): The maximum depth to search.
+    - graph (ig.Graph): 탐색할 그래프.
+    - start_node (int): BFS 시작 노드 인덱스.
+    - stop_nodes (set): 방문 시 탐색을 멈출 노드 인덱스 집합.
+    - max_depth (int): 최대 탐색 깊이.
 
     Returns:
-    - set: The set of visited node indices.
+    - set: 방문한 노드 인덱스 집합 (멈춘 stop_nodes 포함).
     """
     visited = set()  # To keep track of visited nodes
     queue = deque()
